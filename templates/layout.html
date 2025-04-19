@@ -1,0 +1,33 @@
+{% load static %}
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="{% static 'css/style.css'%}">
+    <script src="{% static 'scripts/script.js'%}" defer></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POS System</title>
+
+</head>
+<body>
+    <div class="pos-container">
+        <nav class="sidebar">
+            <div class="icon" onclick="window.location.href='{% url "pos" %}'">🖨️ <span>POS</span></div>
+            <div class="icon" onclick="window.location.href='{% url "inventory" %}'">📦 <span>Inventory</span></div>
+            <div class="icon" onclick="window.location.href='{% url "order" %}'">🛒 <span>Orders</span></div>
+            <div class="icon" onclick="window.location.href='{% url "chat" %}'">📨 <span>Chat Support</span></div>
+            <div class="icon" onclick="window.location.href='{% url "service_queue" %}'">🔧 <span>Service Queue</span></div>
+            {% if request.user.is_superuser %}
+                <div class="icon" onclick="window.location.href='{% url "manager" %}'">👨‍💼 <span>Manager Tools</span></div>
+            {% endif %}
+            <div class="icon">👋 <span>Logout</span></div>
+
+        </nav>
+        
+        {% block content %}
+        {% endblock %}
+        
+    </div>
+</body>
+</html>

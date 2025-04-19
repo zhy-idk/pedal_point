@@ -1,0 +1,152 @@
+{% extends 'layout.html' %}
+
+{% block content %}
+    <div class="main-content">
+            <div class="head">
+            <header class="top-nav">
+                <div class="logo">PedalPoint</div>
+                <div class="search-bar">
+                    <input type="text" id="searchBox" placeholder="Search for Parts, Bikes, etc...">
+                </div>
+                <br>
+                <div class="date-time" id="dateTime"></div>
+            </header>
+                <nav class="category-nav">
+                    
+                    <div class="category" data-category="all">All</div>
+                    
+                    <div class="category" data-category="Bikes">Bikes
+                        <div class="subcategories">
+                            <div class="subcat" data-sub="Trike">Trikes</div>
+                            <div class="subcat" data-sub="Toddler">Toddler</div>
+                            <div class="subcat" data-sub="BMX">BMX</div>
+                            <div class="subcat" data-sub="Mini MTB">Mini MTB</div>
+                            <div class="subcat" data-sub="MTB">MTB</div>
+                            <div class="subcat" data-sub="RB">Road Bike</div>
+                        </div>
+                    </div>
+                    <div class="category" data-category="Handle">Handle
+                        <div class="subcategories">
+                            <div class="subcat" data-sub="Grips">Grips</div>
+                            <div class="subcat" data-sub="Bar Tape">Bar Tape</div>
+                            <div class="subcat" data-sub="Bar End">Bar End</div>
+                            <div class="subcat" data-sub="Stems">Stem</div>
+                            <div class="subcat" data-sub="Head Parts">Head Parts</div>
+                        </div>
+                    </div>
+                    <div class="category" data-category="Fork">Fork
+                        <div class="subcategories">
+                            <div class="subcat" data-sub="Steel">Steel</div>
+                            <div class="subcat" data-sub="Rigid">Rigid</div>
+                            <div class="subcat" data-sub="Air">Air</div>
+                            <div class="subcat" data-sub="Coil">Coil</div>
+                        </div>
+                    </div>
+                    <div class="category" data-category="TR/TB">TR/TB
+                        <div class="subcategories">
+                            <div class="subcat" data-sub="Tire">Tires</div>
+                            <div class="subcat" data-sub="Tube">Tubes</div>
+                        </div>
+                    </div>
+
+                    <div class="category" data-category="Rimset">Rimset 
+                        <div class="subcategories">
+                            <div class="subcat" data-sub="Rims">Rims</div>
+                            <div class="subcat" data-sub="Spokes">Spokes</div>
+                        </div>
+                    </div>
+                    <div class="category" data-category="Hubs">Hubs
+                        <div class="subcategories">
+                            <div class="subcat" data-sub="Thread">Thread Type</div>
+                            <div class="subcat" data-sub="Cassette">Cassette Type</div>
+                            <div class="subcat" data-sub="Axle">Axles</div>
+                            <div class="subcat" data-sub="Skewer">Skewer</div>
+
+                        </div>
+                    </div>
+                <div class="category" data-category="Gears">Gears
+                        <div class="subcategories">
+                            <div class="subcat" data-sub="Sprocket">Sprocket</div>
+                            <div class="subcat" data-sub="Chain">Chain</div>
+                            <div class="subcat" data-sub="RD">Roller</div>
+                            <div class="subcat" data-sub="FD">Changer</div>
+                            <div class="subcat" data-sub="SFT">Shifter</div>
+                        </div>
+                    </div>
+
+                <div class="category" data-category="Brake">Brakes
+                        <div class="subcategories">
+                            <div class="subcat" data-sub="Cable">Cable</div>
+                            <div class="subcat" data-sub="Caliper">Caliper</div>
+                            <div class="subcat" data-sub="VBrake">V-Brake</div>
+                            <div class="subcat" data-sub="Drum">Drum</div>
+                            <div class="subcat" data-sub="Lever">Lever</div>
+                            <div class="subcat" data-sub="LeverAdj">Adjuster</div>
+                            <div class="subcat" data-sub="Disc">Disc</div>
+                            <div class="subcat" data-sub="Hydro">Hydro</div>
+                            <div class="subcat" data-sub="Shoe">Shoe</div>
+                            <div class="subcat" data-sub="Pad">Pad</div>
+                    </div>
+                </div>
+                <div class="category" data-category="Bearings">Bearings 
+                    <div class="subcategories">
+                        <div class="subcat" data-sub="Corona">Corona</div>
+                        <div class="subcat" data-sub="Ball">S.Ball</div>
+                        <div class="subcat" data-sub="Sealed">Sealed</div>
+                </div>
+                </div>
+                <div class="category" data-category="Crank">Crank 
+                    <div class="subcategories">
+                        <div class="subcat" data-sub="1by">1by</div>
+                        <div class="subcat" data-sub="2by">2by</div>
+                        <div class="subcat" data-sub="3by">3by</div>
+                        <div class="subcat" data-sub="Pedal">Pedal</div>
+
+                </div>
+                </div>
+                <div class="category" data-category="N&B">Nuts 
+                    <div class="subcategories">
+                        <div class="subcat" data-sub="Lock">Lock Nut</div>
+                        <div class="subcat" data-sub="RFn">Nuts</div>
+                        <div class="subcat" data-sub="RFc">Cones</div>
+                        <div class="subcat" data-sub="TB">TBolts</div>
+                </div>
+                </div>
+              
+                <div class="category" data-category="Mntc">Maintenance   
+                    <div class="subcategories">
+                        <div class="subcat" data-sub="BOil">Bike Oil</div>
+                        <div class="subcat" data-sub="Cleaner">Cleaner</div>
+                </div>
+                </div>
+                <div class="category" data-category="Extr"> Extras
+                    <div class="subcategories">
+                        <div class="subcat" data-sub="BLock">Bike Lock</div>
+                        <div class="subcat" data-sub="Bell">Bell</div>
+                        <div class="subcat" data-sub="Stand">Stand</div>
+                        <div class="subcat" data-sub="Helmet">Helmet</div>
+                        <div class="subcat" data-sub="Gloves">Gloves</div>
+                        <div class="subcat" data-sub="Boots">Boots</div>
+                </div>
+                </div>
+
+
+                </nav>
+        </div>
+
+            <section class="menu">
+                <h2>ITEMS</h2>
+                <div class="menu-items"></div>
+            </section>
+        </div>
+        <aside class="order-summary">
+            <h2>Items</h2>
+            <div class="orders" id="order-list"></div>
+            <div class="totals" id="total">Total: ₱0.00</div>
+            <div class="payment-section">
+                <label for="paymentInput">Payment:</label>
+                <input type="number" id="paymentInput" placeholder="Enter payment" min="0">
+                <div class="change-output" id="changeOutput">Change: ₱0.00</div>
+            </div>
+        </aside>
+{% endblock %}

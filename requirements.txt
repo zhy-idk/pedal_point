@@ -7,3 +7,4 @@ sqlparse==0.5.3
 tornado==6.4.2
 tzdata==2025.2
 wheel==0.45.1
+whitenoise==6.9.0

@@ -198,7 +198,7 @@ CORS_ALLOW_CREDENTIALS = True
 
 CSRF_COOKIE_HTTPONLY = False  # Must be False for JavaScript access
 CSRF_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_SECURE = False  # Set to True in production
+CSRF_COOKIE_SECURE = True  # Set to True in production
 CSRF_USE_SESSIONS = False  # Important for API usage
 
 ACCOUNT_LOGIN_METHODS = {"email"}

@@ -23,9 +23,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = "django-insecure-#4e&uhfc%8&_-m8a#^th67blgsh$^8y8g=&ae0bbf87l&m89fp"
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 ALLOWED_HOSTS = [
+    "pedal-point.onrender.com",  # Production host
     "localhost",
     "127.0.0.1",
     "192.168.1.123",
@@ -206,6 +207,7 @@ ACCOUNT_SIGNUP_FIELDS = {"email*", "password1*", "password2*"}
 CORS_ALLOW_ALL_ORIGINS = True
 
 CSRF_TRUSTED_ORIGINS = [
+    "https://pedal-point.onrender.com",  # Production host with HTTPS
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:3000",

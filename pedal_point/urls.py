@@ -21,12 +21,17 @@ from django.conf.urls.static import static
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("", include('pos.urls')),
-    path("inventory/", include('inventory.urls')),
-    path("chat/", include('chat.urls')),
-    path("service_queue/", include('service_queue.urls')),
-    path("order/", include('order.urls')),
-    path("manager/", include('manager.urls')),
+    path("", include("pos.urls")),
+    path("inventory/", include("inventory.urls")),
+    path("chat/", include("chat.urls")),
+    path("service_queue/", include("service_queue.urls")),
+    path("order/", include("order.urls")),
+    path("manager/", include("manager.urls")),
+    path("api/", include("api.urls")),
+    path("tinymce/", include("tinymce.urls")),
+    path("accounts/", include("allauth.urls")),
+    # Include the API endpoints:
+    path("_allauth/", include("allauth.headless.urls")),
+    path("grappelli/", include("grappelli.urls")),
+    path("_nested_admin/", include("nested_admin.urls")),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-
-

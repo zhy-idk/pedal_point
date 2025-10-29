@@ -1,0 +1,112 @@
+{% load static %}
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.5/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{% static 'css/style.css'%}">
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js "></script>
+    <script src="{% static 'scripts/script.js'%}" defer></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+                new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+        });
+    </script>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{% endblock %}</title>
+
+</head>
+<body>
+    <div class="container">
+        <aside class="d-flex flex-column flex-shrink-0 bg-dark" 
+        style="position: fixed; top: 0; bottom: 0; left: 0;">
+            <ul class="nav nav-pills flex-column mb-auto">
+                <li class="nav-item">
+                    <a href="{% url 'pos' %}" 
+                    class="nav-link {% if request.resolver_match.url_name == 'pos' %}active{% else %}link-light{% endif %} text-center fs-3" 
+                    aria-current="POS" 
+                    data-bs-toggle="tooltip" 
+                    data-bs-placement="right" 
+                    title="Point Of Sale">
+                    🖨️
+                </a>
+                </li>
+                <li>
+                    <a href="{% url 'inventory' %}" 
+                    class="nav-link {% if request.resolver_match.url_name == 'inventory' %}active{% else %}link-light{% endif %} text-center fs-3" 
+                    aria-current="Inventory" 
+                    data-bs-toggle="tooltip" 
+                    data-bs-placement="right" 
+                    title="Inventory">
+                    📃
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'order' %}" 
+                    class="nav-link {% if request.resolver_match.url_name == 'order' %}active{% else %}link-light{% endif %} text-center fs-3" 
+                    aria-current="Order" 
+                    data-bs-toggle="tooltip" 
+                    data-bs-placement="right" 
+                    title="Order">
+                    🛒
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'chat' %}" 
+                    class="nav-link {% if request.resolver_match.url_name == 'chat' %}active{% else %}link-light{% endif %} text-center fs-3" 
+                    aria-current="Chat" 
+                    data-bs-toggle="tooltip" 
+                    data-bs-placement="right" 
+                    title="Chat">
+                    💬
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'service_queue' %}" 
+                    class="nav-link {% if request.resolver_match.url_name == 'service_queue' %}active{% else %}link-light{% endif %} text-center fs-3" 
+                    aria-current="Service" 
+                    data-bs-toggle="tooltip" 
+                    data-bs-placement="right" 
+                    title="Service">
+                    🛠️
+                    </a>
+                </li>
+                {% if request.user.is_superuser %}
+                    <li>
+                        <a href="{% url 'manager' %}" 
+                        class="nav-link {% if request.resolver_match.url_name == 'manager' %}active{% else %}link-light{% endif %} text-center fs-3" 
+                        aria-current="Manage" 
+                        data-bs-toggle="tooltip" 
+                        data-bs-placement="right" 
+                        title="Manage">
+                        👨‍💼
+                        </a>
+                    </li>
+                {% endif %}
+                <li>
+                    <a href="#" 
+                    class="nav-link {% if request.resolver_match.url_name == '#' %}active{% else %}link-light{% endif %} text-center fs-3" 
+                    aria-current="Logout" 
+                    data-bs-toggle="tooltip" 
+                    data-bs-placement="right" 
+                    title="Logout">
+                    👋
+                    </a>
+                </li>
+            </ul>
+        </aside>
+        
+        
+        {% block content %}
+        {% endblock %}
+        
+    </div>
+</body>
+</html>

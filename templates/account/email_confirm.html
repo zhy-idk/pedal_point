@@ -1,0 +1,113 @@
+{% load i18n %}
+{% load account %}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confirm Your Email - Pedal Point</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center p-4">
+    <div class="max-w-md w-full bg-white rounded-2xl shadow-2xl overflow-hidden">
+        <!-- Header -->
+        <div class="bg-gradient-to-r from-blue-600 to-blue-700 text-white p-8 text-center">
+            <div class="text-5xl mb-3">🚴</div>
+            <h1 class="text-3xl font-bold mb-2">Pedal Point</h1>
+            <p class="text-blue-100">Your Ultimate Bike Parts Destination</p>
+        </div>
+
+        <!-- Content -->
+        <div class="p-8">
+            {% if confirmation %}
+                {% if can_confirm %}
+                    <!-- Confirmation Form -->
+                    <div class="text-center mb-6">
+                        <div class="bg-blue-50 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-4">
+                            <svg class="w-10 h-10 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                            </svg>
+                        </div>
+                        <h2 class="text-2xl font-bold text-gray-800 mb-2">Almost There! 🎉</h2>
+                        <p class="text-gray-600 mb-1">You're one step away from accessing your account.</p>
+                        <p class="text-gray-600 mb-2">Confirm your email to get started:</p>
+                        <p class="text-blue-600 font-semibold text-lg mb-4">{{ confirmation.email_address.email }}</p>
+                    </div>
+
+                    <form method="post" action="{% url 'account_confirm_email' confirmation.key %}">
+                        {% csrf_token %}
+                        <button type="submit" 
+                                class="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold py-4 px-6 rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200 focus:outline-none focus:ring-4 focus:ring-blue-300">
+                            <span class="flex items-center justify-center">
+                                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                </svg>
+                                Confirm Email & Continue
+                            </span>
+                        </button>
+                    </form>
+
+                    <div class="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div class="flex items-start gap-3">
+                            <svg class="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <div class="text-sm text-blue-800">
+                                <p class="font-semibold mb-1">What's next?</p>
+                                <p>After confirming, you'll be redirected to the login page where you can sign in and start exploring!</p>
+                            </div>
+                        </div>
+                    </div>
+                {% else %}
+                    <!-- Already Confirmed -->
+                    <div class="text-center">
+                        <div class="bg-green-50 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-4">
+                            <svg class="w-10 h-10 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                        <h2 class="text-2xl font-bold text-gray-800 mb-3">Already Confirmed!</h2>
+                        <p class="text-gray-600 mb-6">This email address has already been confirmed.</p>
+                        <a href="http://localhost:5173/login" 
+                           class="inline-block w-full bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-semibold py-4 px-6 rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200">
+                            Go to Login Page
+                        </a>
+                    </div>
+                {% endif %}
+            {% else %}
+                <!-- Invalid Link -->
+                <div class="text-center">
+                    <div class="bg-red-50 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-4">
+                        <svg class="w-10 h-10 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                    </div>
+                    <h2 class="text-2xl font-bold text-gray-800 mb-3">Invalid Confirmation Link</h2>
+                    <p class="text-gray-600 mb-6">This email confirmation link is invalid or has expired. Please request a new confirmation email.</p>
+                    <a href="http://localhost:5173/login" 
+                       class="inline-block w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold py-4 px-6 rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all duration-200">
+                        Go to Login
+                    </a>
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- Footer -->
+        <div class="bg-gray-50 p-6 text-center border-t border-gray-200">
+            <p class="text-sm text-gray-600">
+                Need help? <a href="mailto:support@pedalpoint.com" class="text-blue-600 hover:text-blue-700 font-semibold">Contact Support</a>
+            </p>
+            <p class="text-xs text-gray-500 mt-2">© 2024 Pedal Point. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
+

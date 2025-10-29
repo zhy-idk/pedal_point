@@ -1,0 +1,27 @@
+{% load account %}
+{% user_display user as user_display %}
+{% load i18n %}
+{% autoescape off %}
+
+Hello {{ user_display }}!
+
+Thank you for signing up with Pedal Point!
+
+To complete your account setup and start shopping for the best bike parts and accessories, please confirm your email address by clicking the link below:
+
+{{ activate_url }}
+
+Once you confirm your email, you'll be able to:
+- Browse our extensive collection of bike components
+- Build your dream bike with our Bike Builder
+- Access exclusive deals and new product notifications
+- Track your orders and manage your profile
+
+If you have any questions or need assistance, feel free to contact our support team.
+
+Welcome to the Pedal Point community!
+
+Best regards,
+The Pedal Point Team
+
+{% endautoescape %}

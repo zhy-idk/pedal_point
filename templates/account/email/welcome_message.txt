@@ -1,0 +1,14 @@
+{% load account %}
+{% user_display user as user_display %}
+{% load i18n %}
+{% autoescape off %}
+
+Welcome to Pedal Point, {{ user_display }}!
+
+Your email has been successfully confirmed and your account is now active.
+
+
+Happy shopping!
+The Pedal Point Team
+
+{% endautoescape %}

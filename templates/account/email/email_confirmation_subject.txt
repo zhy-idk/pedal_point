@@ -1,0 +1,4 @@
+{% load i18n %}
+{% autoescape off %}
+Confirm Your Email Address - Pedal Point
+{% endautoescape %}

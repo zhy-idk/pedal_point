@@ -1,0 +1,154 @@
+"""
+Utility functions for the API app.
+"""
+from django.utils import timezone
+from datetime import timedelta
+
+
+def send_reservation_notification(reservation, notification_type):
+    """
+    Send notification to user about their reservation status.
+    notification_type: 'activated', 'expired', 'moved_up'
+    """
+    # TODO: Implement email/push notification system
+    # For now, we'll just log it
+    messages = {
+        'activated': f"Your reservation for {reservation.product.name} is now active! You have 3 days to complete your purchase.",
+        'expired': f"Your reservation for {reservation.product.name} has expired. The product has been assigned to the next person in queue.",
+        'moved_up': f"Good news! You moved up in the reservation queue for {reservation.product.name}. You are now #{reservation.queue_position}.",
+    }
+    
+    message = messages.get(notification_type, '')
+    print(f"NOTIFICATION to {reservation.user.email}: {message}")
+    
+    # Here you would integrate with:
+    # - Email service (Django's send_mail)
+    # - Push notification service
+    # - In-app notification system
+    # - SMS service
+
+
+def process_product_reservations(product):
+    """
+    Process reservations for a product when it's restocked.
+    Activates the first waiting reservation and updates queue positions.
+    """
+    from .models import ReservedProduct
+    
+    # Get all active and waiting reservations for this product
+    reservations = ReservedProduct.objects.filter(
+        product=product,
+        status__in=['waiting', 'active']
+    ).order_by('queue_position')
+    
+    # Check for expired active reservations
+    for reservation in reservations.filter(status='active'):
+        if reservation.is_expired():
+            reservation.status = 'expired'
+            reservation.save()
+            send_reservation_notification(reservation, 'expired')
+    
+    # Refresh the queryset after expiring old ones
+    reservations = ReservedProduct.objects.filter(
+        product=product,
+        status__in=['waiting', 'active']
+    ).order_by('queue_position')
+    
+    # If product is in stock and there are waiting reservations
+    if product.stock > 0:
+        # Check if there's already an active reservation
+        active_reservation = reservations.filter(status='active').first()
+        
+        if not active_reservation:
+            # Activate the first waiting reservation
+            first_waiting = reservations.filter(status='waiting').first()
+            if first_waiting:
+                first_waiting.activate_reservation()
+                send_reservation_notification(first_waiting, 'activated')
+                print(f"Activated reservation for {first_waiting.user.username} - Product: {product.name}")
+    
+    # Update queue positions for all waiting reservations
+    waiting_reservations = reservations.filter(status='waiting').order_by('created_at')
+    for idx, reservation in enumerate(waiting_reservations, start=1):
+        # Skip active reservations in position counting
+        active_count = reservations.filter(status='active').count()
+        old_position = reservation.queue_position
+        reservation.queue_position = active_count + idx
+        reservation.save(update_fields=['queue_position'])
+        
+        # Notify if position changed (moved up)
+        if old_position > reservation.queue_position:
+            send_reservation_notification(reservation, 'moved_up')
+
+
+def process_expired_reservations():
+    """
+    Process all expired reservations across all products.
+    Called by a scheduled task (cron job or management command).
+    """
+    from .models import ReservedProduct, Product
+    
+    # Find all active reservations that have expired
+    expired_reservations = ReservedProduct.objects.filter(
+        status='active',
+        expires_at__lt=timezone.now()
+    )
+    
+    # Group by product
+    products_to_reprocess = set()
+    
+    for reservation in expired_reservations:
+        reservation.status = 'expired'
+        reservation.save()
+        products_to_reprocess.add(reservation.product)
+        print(f"Expired reservation for {reservation.user.username} - Product: {reservation.product.name}")
+    
+    # Reprocess each affected product
+    for product in products_to_reprocess:
+        process_product_reservations(product)
+
+
+def check_reservation_access(product, user):
+    """
+    Check if a user can purchase a product based on reservation status.
+    Returns (can_purchase: bool, reason: str)
+    """
+    from .models import ReservedProduct
+    
+    if not user or not user.is_authenticated:
+        # Check if product has active reservations
+        has_active = ReservedProduct.objects.filter(
+            product=product,
+            status='active'
+        ).exists()
+        
+        if has_active:
+            return False, "This product is currently reserved for another customer"
+        return True, ""
+    
+    # Get user's reservation if any
+    user_reservation = ReservedProduct.objects.filter(
+        product=product,
+        user=user,
+        status__in=['waiting', 'active']
+    ).first()
+    
+    # Check for other users' active reservations
+    other_active = ReservedProduct.objects.filter(
+        product=product,
+        status='active'
+    ).exclude(user=user).exists()
+    
+    if other_active:
+        if user_reservation and user_reservation.status == 'waiting':
+            return False, f"This product is reserved. You are #{user_reservation.queue_position} in queue."
+        return False, "This product is currently reserved for another customer"
+    
+    # No active reservations from others
+    if user_reservation and user_reservation.status == 'active':
+        # User has active reservation
+        return True, ""
+    
+    # Product is available (no active reservations)
+    return True, ""
+

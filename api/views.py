@@ -1306,14 +1306,25 @@ def update_listing(request, listing_id):
 
         # Parse JSON arrays from FormData if they exist
         data = request.data.copy()
+        
+        print(f"DEBUG update_listing: Raw data keys: {list(data.keys())}")
+        print(f"DEBUG update_listing: Raw compatibility_tag_ids: {data.get('compatibility_tag_ids')} (type: {type(data.get('compatibility_tag_ids'))})")
+        
         if "compatibility_tag_ids" in data and isinstance(
             data["compatibility_tag_ids"], str
         ):
             import json
-
-            data["compatibility_tag_ids"] = json.loads(
-                data["compatibility_tag_ids"]
-            )
+            try:
+                data["compatibility_tag_ids"] = json.loads(
+                    data["compatibility_tag_ids"]
+                )
+                print(f"DEBUG update_listing: Parsed compatibility_tag_ids: {data['compatibility_tag_ids']}")
+            except json.JSONDecodeError as e:
+                print(f"DEBUG update_listing: JSON parse error: {e}")
+                return Response(
+                    {"error": f"Invalid JSON in compatibility_tag_ids: {str(e)}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         serializer = ProductListingSerializer(listing, data=data, partial=True)
 
@@ -1331,6 +1342,7 @@ def update_listing(request, listing_id):
 
             return Response(ProductListingSerializer(listing).data)
         else:
+            print(f"DEBUG update_listing: Serializer validation errors: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     except ProductListing.DoesNotExist:
         return Response(

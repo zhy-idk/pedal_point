@@ -577,7 +577,22 @@ class ServiceQueueAdmin(admin.ModelAdmin):
 
 otp_admin_site.register(ChatRoom)
 otp_admin_site.register(ChatItem)
-otp_admin_site.register(Sales)
+@admin.register(Sales, site=otp_admin_site)
+class SalesAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'salesperson', 'sale_date', 'payment_method', 'get_total_amount']
+    list_filter = ['payment_method', 'sale_date', 'salesperson']
+    search_fields = ['user__username', 'salesperson__username']
+    readonly_fields = ['sale_date']
+    date_hierarchy = 'sale_date'
+    
+    def get_total_amount(self, obj):
+        total = sum(item.amount or 0 for item in obj.sales_item.all())
+        return f"₱{total:,.2f}"
+    get_total_amount.short_description = 'Total Amount'
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('user', 'salesperson').prefetch_related('sales_item')
+
 otp_admin_site.register(SalesItem)
 otp_admin_site.register(UserProfile)
 otp_admin_site.register(ReservedProduct)

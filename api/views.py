@@ -827,7 +827,12 @@ def pos_sale(request):
             )
 
         # Create a Sales record for this POS transaction
-        sale = Sales.objects.create(user=user, payment_method=payment_method)
+        # Set salesperson to the staff member processing the sale
+        sale = Sales.objects.create(
+            user=user, 
+            payment_method=payment_method,
+            salesperson=request.user  # Staff member who processed this POS sale
+        )
 
         # Process sale items
         total_amount = 0
@@ -1068,7 +1073,7 @@ def update_order_status(request, order_id):
 def get_sales(request):
     sales = Sales.objects.prefetch_related(
         "sales_item__product__product_listing", "sales_item__product__brand", "user"
-    ).order_by("-sale_date")
+    ).select_related("salesperson").order_by("-sale_date")
     serializer = SalesSerializer(sales, many=True)
     return Response(serializer.data)
 
@@ -1140,7 +1145,12 @@ def create_refund(request):
             )
 
         # Create a Sales record for this refund
-        sale = Sales.objects.create(user=user, payment_method=payment_method)
+        # Set salesperson to the staff member processing the refund
+        sale = Sales.objects.create(
+            user=user, 
+            payment_method=payment_method,
+            salesperson=request.user  # Staff member who processed this refund
+        )
 
         # Process refund items (negative amounts)
         total_refund = 0
@@ -2252,8 +2262,18 @@ def get_queue_count(request):
 @permission_classes([IsAuthenticated])
 def schedule_service(request):
     # Support both customer self-service and staff adding for customer
+    print(f"DEBUG schedule_service: request.user={request.user}, is_authenticated={request.user.is_authenticated}, is_staff={request.user.is_staff}")
+    
     user_id = request.data.get("user")  # Staff can specify customer ID
     is_staff_request = bool(user_id and user_id != request.user.id)
+    
+    # If trying to add service for another user, must be staff
+    if is_staff_request and not request.user.is_staff:
+        print(f"DEBUG schedule_service: PERMISSION DENIED - User {request.user.id} is not staff")
+        return Response(
+            {"error": "Only staff members can add services for other users. Please ensure your account has staff permissions."},
+            status=status.HTTP_403_FORBIDDEN
+        )
     
     if not user_id:
         user_id = request.user.id  # Default to current user (customer self-service)

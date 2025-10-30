@@ -537,12 +537,13 @@ class SalesItemSerializer(serializers.ModelSerializer):
 
 class SalesSerializer(serializers.ModelSerializer):
     user = UsernameSerializer(read_only=True)
+    salesperson = UsernameSerializer(read_only=True)
     sales_item = SalesItemSerializer(many=True, read_only=True)
     total_amount = serializers.SerializerMethodField()
     
     class Meta:
         model = Sales
-        fields = ["id", "user", "sale_date", "payment_method", "sales_item", "total_amount"]
+        fields = ["id", "user", "sale_date", "payment_method", "salesperson", "sales_item", "total_amount"]
     
     def get_total_amount(self, obj):
         # Sum up all item amounts (positive for sales, negative for refunds)

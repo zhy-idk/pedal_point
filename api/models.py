@@ -805,6 +805,15 @@ class Sales(models.Model):
         default="cash",
         verbose_name="Payment Method",
     )
+    salesperson = models.ForeignKey(
+        "auth.User",
+        on_delete=models.SET_NULL,
+        verbose_name="Salesperson",
+        related_name="sales_as_salesperson",
+        null=True,
+        blank=True,
+        help_text="Staff member who processed this sale (POS only, None for online sales)",
+    )
 
     class Meta:
         verbose_name = "Sale"

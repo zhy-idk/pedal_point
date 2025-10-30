@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     "livereload",
     "rest_framework",
     "corsheaders",
+    "storages",
     "tinymce",
     "django.contrib.sites",
     "allauth",
@@ -188,12 +189,34 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
-
 STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
+
+# Google Cloud Storage Settings
+USE_GCS = os.getenv("USE_GCS", "False") == "True"
+
+if USE_GCS:
+    # GCS Settings
+    GS_BUCKET_NAME = os.getenv("GS_BUCKET_NAME")
+    GS_PROJECT_ID = os.getenv("GS_PROJECT_ID")
+    GS_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")  # Path to service account JSON
+    
+    # Media files storage
+    DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
+    GS_DEFAULT_ACL = "publicRead"
+    GS_FILE_OVERWRITE = False
+    GS_MAX_MEMORY_SIZE = 5242880  # 5MB
+    
+    # Media URL will be served from GCS
+    MEDIA_URL = f"https://storage.googleapis.com/{GS_BUCKET_NAME}/"
+    
+    # Optional: Use GCS for static files too (recommended for production)
+    # STATICFILES_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
+else:
+    # Local file storage (development)
+    MEDIA_URL = "/media/"
+    MEDIA_ROOT = BASE_DIR / "media"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

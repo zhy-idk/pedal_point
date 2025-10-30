@@ -6,4 +6,11 @@ db.sqlite3
 media/
 .vscode/
 data_backup.json
-"data_backup.json" 
+"data_backup.json"
+
+# Google Cloud Storage credentials
+service-account*.json
+*-service-account.json
+gcs-credentials.json 
+
+pedalpoint-474521-33b822d2861b.json

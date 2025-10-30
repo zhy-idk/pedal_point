@@ -19,7 +19,9 @@ django-grappelli==4.0.2
 django-livereload-server==0.5.1
 django-nested-admin==4.1.1
 django-otp==1.6.1
+django-storages==1.14.4
 django-tinymce==4.1.0
+google-cloud-storage==2.18.2
 djangorestframework==3.16.0
 fido2==2.0.0
 hyperlink==21.0.0

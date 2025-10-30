@@ -1292,9 +1292,13 @@ def create_listing(request):
 @permission_classes([IsAuthenticated])
 def update_listing(request, listing_id):
     """Update a product listing. Only accessible by staff."""
+    print(f"DEBUG update_listing: user={request.user}, is_authenticated={request.user.is_authenticated}, is_staff={request.user.is_staff}")
+    
     if not request.user.is_staff:
+        print(f"DEBUG update_listing: PERMISSION DENIED - User {request.user.id} is not staff")
         return Response(
-            {"error": "Staff access required"}, status=status.HTTP_403_FORBIDDEN
+            {"error": "Staff access required. Please ensure your account has staff permissions."}, 
+            status=status.HTTP_403_FORBIDDEN
         )
 
     try:

@@ -197,10 +197,69 @@ STATICFILES_DIRS = [
 USE_GCS = os.getenv("USE_GCS", "False") == "True"
 
 if USE_GCS:
+    import json
+    from google.oauth2 import service_account
+    
     # GCS Settings
     GS_BUCKET_NAME = os.getenv("GS_BUCKET_NAME")
     GS_PROJECT_ID = os.getenv("GS_PROJECT_ID")
-    GS_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")  # Path to service account JSON
+    
+    # Handle credentials - can be either JSON string (cloud) or file path (local)
+    GS_CREDENTIALS_JSON = os.getenv("GS_CREDENTIALS_JSON")  # JSON content as string
+    GS_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")  # Path to service account JSON
+    
+    if GS_CREDENTIALS_JSON:
+        # If credentials are provided as JSON string (common in cloud platforms like Render)
+        try:
+            credentials_dict = json.loads(GS_CREDENTIALS_JSON)
+            GS_CREDENTIALS = service_account.Credentials.from_service_account_info(credentials_dict)
+            print("GCS: Using credentials from GS_CREDENTIALS_JSON environment variable")
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"ERROR: Failed to parse GS_CREDENTIALS_JSON: {e}")
+            GS_CREDENTIALS = None
+    elif GS_CREDENTIALS_PATH:
+        # Try to find the credentials file - handle both absolute and relative paths
+        credential_file = None
+        
+        # Extract just the filename if full path is provided
+        filename = os.path.basename(GS_CREDENTIALS_PATH)
+        
+        # First, try Render's secret files location (/etc/secrets/)
+        render_secret_path = Path("/etc/secrets") / filename
+        if os.path.exists(render_secret_path):
+            credential_file = render_secret_path
+            print(f"GCS: Found credentials in Render secrets: {render_secret_path}")
+        # Then try the path as-is (absolute path)
+        elif os.path.exists(GS_CREDENTIALS_PATH):
+            credential_file = GS_CREDENTIALS_PATH
+        # Then try relative to BASE_DIR (project root)
+        elif os.path.exists(BASE_DIR / GS_CREDENTIALS_PATH):
+            credential_file = BASE_DIR / GS_CREDENTIALS_PATH
+        # Try with just filename relative to BASE_DIR
+        elif os.path.exists(BASE_DIR / filename):
+            credential_file = BASE_DIR / filename
+        # Try in the same directory as settings.py
+        elif os.path.exists(Path(__file__).parent / GS_CREDENTIALS_PATH):
+            credential_file = Path(__file__).parent / GS_CREDENTIALS_PATH
+        
+        if credential_file and os.path.exists(credential_file):
+            GS_CREDENTIALS = str(credential_file)
+            print(f"GCS: Using credentials from file: {GS_CREDENTIALS}")
+        else:
+            print(f"WARNING: GCS credentials file not found: {GS_CREDENTIALS_PATH}")
+            print(f"  Tried: /etc/secrets/{filename} (Render secrets)")
+            print(f"  Tried: {GS_CREDENTIALS_PATH}")
+            print(f"  Tried: {BASE_DIR / GS_CREDENTIALS_PATH}")
+            print(f"  Tried: {BASE_DIR / filename}")
+            print(f"  Tried: {Path(__file__).parent / GS_CREDENTIALS_PATH}")
+            GS_CREDENTIALS = None
+    else:
+        # Try to use default credentials from environment (for GCP environments)
+        print("GCS: No explicit credentials found. Using default credentials if available.")
+        GS_CREDENTIALS = None
+    
+    if not GS_BUCKET_NAME:
+        print("WARNING: GS_BUCKET_NAME not set. GCS storage may not work correctly.")
     
     # Media files storage
     DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
@@ -225,6 +284,54 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Sites framework
 SITE_ID = 1
+
+# Django-allauth Social Account Settings
+# Get backend URL - django-allauth uses this to construct OAuth redirect URIs
+BACKEND_URL = os.getenv("BACKEND_URL", "https://pedal-point.onrender.com")
+
+# Social Account Provider Settings
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {
+        "SCOPE": [
+            "profile",
+            "email",
+        ],
+        "AUTH_PARAMS": {
+            "access_type": "online",
+        },
+        "APP": {
+            "client_id": os.getenv("GOOGLE_OAUTH_CLIENT_ID", ""),
+            "secret": os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", ""),
+            "key": "",
+        },
+    },
+    "facebook": {
+        "METHOD": "oauth2",
+        "SDK_URL": "//connect.facebook.net/{locale}/sdk.js",
+        "SCOPE": ["email", "public_profile"],
+        "AUTH_PARAMS": {"auth_type": "reauthenticate"},
+        "INIT_PARAMS": {"cookie": True},
+        "FIELDS": [
+            "id",
+            "first_name",
+            "last_name",
+            "middle_name",
+            "name",
+            "name_format",
+            "picture",
+            "short_name",
+        ],
+        "EXCHANGE_TOKEN": True,
+        "LOCALE_FUNC": "path.to.callable",
+        "VERIFIED_EMAIL": False,
+        "VERSION": "v18.0",
+        "APP": {
+            "client_id": os.getenv("FACEBOOK_APP_ID", ""),
+            "secret": os.getenv("FACEBOOK_APP_SECRET", ""),
+            "key": "",
+        },
+    },
+}
 
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",  # default Django auth

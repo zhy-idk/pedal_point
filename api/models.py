@@ -12,7 +12,14 @@ def upload_to_listing_folder(instance, filename):
 
 
 def upload_to_product_folder(instance, filename):
-    return os.path.join("products", str(instance.product.id), filename)
+    # Handle both ProductImage (has product_listing) and ProductVariantImage (has product)
+    if hasattr(instance, 'product_listing'):
+        return os.path.join("products", str(instance.product_listing.id), filename)
+    elif hasattr(instance, 'product'):
+        return os.path.join("products", str(instance.product.id), filename)
+    else:
+        # Fallback for other cases
+        return os.path.join("products", filename)
 
 
 def upload_to_user_folder(instance, filename):

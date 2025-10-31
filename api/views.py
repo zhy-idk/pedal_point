@@ -1427,11 +1427,19 @@ def create_listing(request):
         # Handle product images
         for key in request.FILES.keys():
             if key.startswith("product_image_"):
-                ProductImage.objects.create(
-                    product_listing=listing,
-                    image=request.FILES[key],
-                    alt_text=listing.name or "Product image",
-                )
+                try:
+                    image_file = request.FILES[key]
+                    print(f"DEBUG create_listing: Saving image {key}: {image_file.name} ({image_file.size} bytes)")
+                    product_image = ProductImage.objects.create(
+                        product_listing=listing,
+                        image=image_file,
+                        alt_text=listing.name or "Product image",
+                    )
+                    print(f"DEBUG create_listing: Image saved successfully. URL: {product_image.image.url}")
+                except Exception as e:
+                    print(f"ERROR create_listing: Failed to save image {key}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
 
         return Response(
             ProductListingSerializer(listing).data, status=status.HTTP_201_CREATED
@@ -1531,11 +1539,19 @@ def update_listing(request, listing_id):
             # Handle new product images
             for key in request.FILES.keys():
                 if key.startswith("product_image_"):
-                    ProductImage.objects.create(
-                        product_listing=listing,
-                        image=request.FILES[key],
-                        alt_text=listing.name or "Product image",
-                    )
+                    try:
+                        image_file = request.FILES[key]
+                        print(f"DEBUG update_listing: Saving image {key}: {image_file.name} ({image_file.size} bytes)")
+                        product_image = ProductImage.objects.create(
+                            product_listing=listing,
+                            image=image_file,
+                            alt_text=listing.name or "Product image",
+                        )
+                        print(f"DEBUG update_listing: Image saved successfully. URL: {product_image.image.url}")
+                    except Exception as e:
+                        print(f"ERROR update_listing: Failed to save image {key}: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
 
             return Response(ProductListingSerializer(listing).data)
         else:

@@ -226,7 +226,11 @@ urlpatterns = [
         name="test_inventory_update",
     ),
     # PayMongo Payment Integration
-    # Note: Checkout session creation is now handled directly in frontend
+    path(
+        "payments/create-checkout/",
+        views.create_paymongo_checkout_session,
+        name="create_paymongo_checkout_session",
+    ),
     path(
         "payments/confirm/<int:order_id>/",
         views.confirm_payment,

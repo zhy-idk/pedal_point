@@ -2230,8 +2230,14 @@ def get_all_suppliers(request):
 
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def create_supplier(request):
     """Create a new supplier."""
+    if not request.user.is_staff:
+        return Response(
+            {"error": "Staff access required"}, status=status.HTTP_403_FORBIDDEN
+        )
+    
     try:
         data = request.data
         name = data.get("name", "").strip()
@@ -2275,8 +2281,14 @@ def create_supplier(request):
 
 
 @api_view(["PUT"])
+@permission_classes([IsAuthenticated])
 def update_supplier(request, supplier_id):
     """Update an existing supplier."""
+    if not request.user.is_staff:
+        return Response(
+            {"error": "Staff access required"}, status=status.HTTP_403_FORBIDDEN
+        )
+    
     try:
         data = request.data
         name = data.get("name", "").strip()
@@ -2339,8 +2351,14 @@ def update_supplier(request, supplier_id):
 
 
 @api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
 def delete_supplier(request, supplier_id):
     """Delete a supplier."""
+    if not request.user.is_staff:
+        return Response(
+            {"error": "Staff access required"}, status=status.HTTP_403_FORBIDDEN
+        )
+    
     try:
         try:
             supplier = ProductSupplier.objects.get(id=supplier_id)
@@ -2879,6 +2897,99 @@ def dashboard_data(request):
 
 # Note: Checkout session creation is now handled directly in the frontend
 # The frontend calls PayMongo API directly for better performance and reduced backend complexity
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_paymongo_checkout_session(request):
+    """Create a PayMongo checkout session (server-side, uses secret key)"""
+    try:
+        from .paymongo_service import PayMongoService
+        from django.conf import settings
+        
+        order_id = request.data.get("order_id")
+        if not order_id:
+            return Response(
+                {"error": "order_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get the order
+        try:
+            order = Order.objects.get(id=order_id, user=request.user)
+        except Order.DoesNotExist:
+            return Response(
+                {"error": "Order not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get frontend URL from request or use settings
+        frontend_url = request.data.get("frontend_url") or settings.FRONTEND_URL
+        
+        # Prepare line items
+        line_items = []
+        for item in order.items.select_related('product').all():
+            amount = int(float(item.product.price) * item.quantity * 100)  # Convert to centavos
+            line_items.append({
+                "currency": "PHP",
+                "amount": amount,
+                "name": f"{item.product.name} {item.product.variant_attribute or ''}".strip(),
+                "quantity": item.quantity,
+            })
+        
+        # Prepare billing info
+        billing = {
+            "name": f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username,
+            "email": request.user.email,
+            "phone": order.contact_number or None,
+        }
+        
+        # Prepare metadata
+        metadata = {
+            "order_id": str(order.id),
+            "customer_name": billing["name"],
+            "customer_email": billing["email"],
+        }
+        
+        # Create checkout session using PayMongo service
+        paymongo_service = PayMongoService()
+        
+        # Build success and cancel URLs
+        success_url = f"{frontend_url}/payment/success?order_id={order_id}"
+        cancel_url = f"{frontend_url}/payment/cancel?order_id={order_id}"
+        
+        # Create checkout session
+        checkout_session = paymongo_service._make_request(
+            "POST",
+            "/checkout_sessions",
+            {
+                "data": {
+                    "attributes": {
+                        "billing": billing,
+                        "send_email_receipt": True,
+                        "show_description": True,
+                        "show_line_items": True,
+                        "line_items": line_items,
+                        "payment_method_types": ["card", "gcash", "paymaya", "dob", "qrph"],
+                        "success_url": success_url,
+                        "cancel_url": cancel_url,
+                        "description": f"Order #{order_id}",
+                        "metadata": metadata,
+                    }
+                }
+            }
+        )
+        
+        return Response(checkout_session, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        logger.error(f"Failed to create PayMongo checkout session: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return Response(
+            {"error": f"Failed to create checkout session: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @api_view(["GET"])

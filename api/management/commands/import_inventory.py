@@ -247,6 +247,24 @@ class Command(BaseCommand):
                 listings_existing = 0
                 products_created = 0
 
+                # First, create suppliers based on brands (one supplier per brand)
+                # Create a mapping of brand_name -> supplier
+                brand_to_supplier = {}
+                brand_list = sorted(grouped_data.keys())  # Sort for consistent numbering
+                
+                for idx, brand_name in enumerate(brand_list, start=1):
+                    supplier_name = f"Supplier #{idx}"
+                    supplier, created = ProductSupplier.objects.get_or_create(
+                        name=supplier_name,
+                        defaults={'name': supplier_name}
+                    )
+                    brand_to_supplier[brand_name] = supplier
+                    if created:
+                        suppliers_created += 1
+                    else:
+                        suppliers_existing += 1
+                    self.stdout.write(f'  Brand "{brand_name}" -> {supplier_name}')
+
                 # Process each brand
                 for brand_name, products in grouped_data.items():
                     # Create or get brand
@@ -259,22 +277,11 @@ class Command(BaseCommand):
                     else:
                         brands_existing += 1
 
+                    # Get supplier for this brand
+                    supplier = brand_to_supplier[brand_name]
+
                     # Process each product name within this brand
                     for product_name, variants in products.items():
-                        # Determine supplier - use supplier from first variant if available,
-                        # otherwise use product name as supplier name
-                        first_variant = variants[0]
-                        supplier_name = first_variant['supplier_name'] or product_name
-                        
-                        # Create or get supplier
-                        supplier, created = ProductSupplier.objects.get_or_create(
-                            name=supplier_name,
-                            defaults={'name': supplier_name}
-                        )
-                        if created:
-                            suppliers_created += 1
-                        else:
-                            suppliers_existing += 1
 
                         # Find minimum price for listing
                         min_price = min(v['price'] for v in variants)

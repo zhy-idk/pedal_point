@@ -224,34 +224,68 @@ if USE_GCS:
         # Extract just the filename if full path is provided
         filename = os.path.basename(GS_CREDENTIALS_PATH)
         
-        # First, try Render's secret files location (/etc/secrets/)
-        render_secret_path = Path("/etc/secrets") / filename
-        if os.path.exists(render_secret_path):
-            credential_file = render_secret_path
-            print(f"GCS: Found credentials in Render secrets: {render_secret_path}")
-        # Then try the path as-is (absolute path)
-        elif os.path.exists(GS_CREDENTIALS_PATH):
-            credential_file = GS_CREDENTIALS_PATH
-        # Then try relative to BASE_DIR (project root)
-        elif os.path.exists(BASE_DIR / GS_CREDENTIALS_PATH):
-            credential_file = BASE_DIR / GS_CREDENTIALS_PATH
-        # Try with just filename relative to BASE_DIR
-        elif os.path.exists(BASE_DIR / filename):
-            credential_file = BASE_DIR / filename
-        # Try in the same directory as settings.py
-        elif os.path.exists(Path(__file__).parent / GS_CREDENTIALS_PATH):
-            credential_file = Path(__file__).parent / GS_CREDENTIALS_PATH
+        # List of paths to try (in order of preference)
+        paths_to_try = [
+            # Render's secret files location
+            Path("/etc/secrets") / filename,
+            # Path as-is (absolute path)
+            Path(GS_CREDENTIALS_PATH) if os.path.isabs(GS_CREDENTIALS_PATH) else None,
+            # Relative to BASE_DIR (project root)
+            BASE_DIR / GS_CREDENTIALS_PATH,
+            # Just filename relative to BASE_DIR
+            BASE_DIR / filename,
+            # In pedal_point directory (where settings.py is)
+            BASE_DIR / "pedal_point" / filename,
+            # Same directory as settings.py
+            Path(__file__).parent / GS_CREDENTIALS_PATH,
+            Path(__file__).parent / filename,
+            # Try pedal_point subdirectory
+            BASE_DIR / "pedal_point" / GS_CREDENTIALS_PATH,
+        ]
+        
+        # Filter out None values and check each path
+        for path in paths_to_try:
+            if path is None:
+                continue
+            try:
+                abs_path = Path(path).resolve()
+                if abs_path.exists() and abs_path.is_file():
+                    credential_file = abs_path
+                    print(f"GCS: Found credentials file at: {credential_file}")
+                    break
+            except Exception:
+                continue
         
         if credential_file and os.path.exists(credential_file):
-            GS_CREDENTIALS = str(credential_file)
-            print(f"GCS: Using credentials from file: {GS_CREDENTIALS}")
+            # Verify the credentials file is valid JSON
+            try:
+                with open(credential_file, 'r') as f:
+                    cred_data = json.load(f)
+                    # Basic validation - check for required fields
+                    if 'type' not in cred_data or cred_data.get('type') != 'service_account':
+                        print(f"WARNING: Credentials file may not be a valid service account key")
+                    print(f"GCS: Credentials file validated. Service account: {cred_data.get('client_email', 'N/A')}")
+            except json.JSONDecodeError as e:
+                print(f"ERROR: Credentials file is not valid JSON: {e}")
+                credential_file = None
+            except Exception as e:
+                print(f"WARNING: Could not validate credentials file: {e}")
+            
+            if credential_file:
+                # Use absolute path for GS_CREDENTIALS
+                GS_CREDENTIALS = str(credential_file.resolve())
+                # Also update GOOGLE_APPLICATION_CREDENTIALS env var for Google Cloud libraries
+                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GS_CREDENTIALS
+                print(f"GCS: Using credentials from file: {GS_CREDENTIALS}")
+                print(f"GCS: Set GOOGLE_APPLICATION_CREDENTIALS={GS_CREDENTIALS}")
+            else:
+                GS_CREDENTIALS = None
         else:
-            print(f"WARNING: GCS credentials file not found: {GS_CREDENTIALS_PATH}")
-            print(f"  Tried: /etc/secrets/{filename} (Render secrets)")
-            print(f"  Tried: {GS_CREDENTIALS_PATH}")
-            print(f"  Tried: {BASE_DIR / GS_CREDENTIALS_PATH}")
-            print(f"  Tried: {BASE_DIR / filename}")
-            print(f"  Tried: {Path(__file__).parent / GS_CREDENTIALS_PATH}")
+            print(f"ERROR: GCS credentials file not found: {GS_CREDENTIALS_PATH}")
+            print(f"  Searched in {len(paths_to_try)} locations:")
+            for i, path in enumerate(paths_to_try, 1):
+                if path is not None:
+                    print(f"    {i}. {path}")
             GS_CREDENTIALS = None
     else:
         # Try to use default credentials from environment (for GCP environments)
@@ -259,7 +293,20 @@ if USE_GCS:
         GS_CREDENTIALS = None
     
     if not GS_BUCKET_NAME:
-        print("WARNING: GS_BUCKET_NAME not set. GCS storage may not work correctly.")
+        print("ERROR: GS_BUCKET_NAME not set. GCS storage will not work correctly.")
+    else:
+        print(f"GCS: Bucket name: {GS_BUCKET_NAME}")
+    
+    if not GS_PROJECT_ID:
+        print("WARNING: GS_PROJECT_ID not set. Some GCS operations may fail.")
+    else:
+        print(f"GCS: Project ID: {GS_PROJECT_ID}")
+    
+    # Verify credentials are set
+    if GS_CREDENTIALS:
+        print(f"GCS: Credentials configured: {type(GS_CREDENTIALS)}")
+    else:
+        print("WARNING: GS_CREDENTIALS is None. Uploads may fail if default credentials are not available.")
     
     # Media files storage - use custom storage backend with explicit public ACL
     DEFAULT_FILE_STORAGE = "pedal_point.storage.PublicGoogleCloudStorage"

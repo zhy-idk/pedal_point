@@ -334,9 +334,9 @@ class ProductListing(models.Model):
         for tag in tags:
             if tag.tag_type in grouped:
                 grouped[tag.tag_type].append(tag)
-        
+
         return grouped
-    
+
     def get_use_cases(self):
         """Get use case tags (city, trail, casual)"""
         return self.compatibility_tags.filter(tag_type="use_case")
@@ -344,11 +344,11 @@ class ProductListing(models.Model):
     def get_budget_tiers(self):
         """Get budget tier tags (budget, mid, premium)"""
         return self.compatibility_tags.filter(tag_type="budget")
-    
+
     def get_physical_specs(self):
         """Get physical compatibility tags (brake type, wheel size, etc.)"""
         return self.compatibility_tags.filter(tag_type="physical")
-    
+
     def is_compatible_with_tags(self, tag_ids):
         """
         Check if product matches given compatibility tags.
@@ -360,7 +360,7 @@ class ProductListing(models.Model):
         
         product_tag_ids = set(self.compatibility_tags.values_list('id', flat=True))
         required_tag_ids = set(tag_ids)
-        
+
         # Product is compatible if it has the required tags
         return bool(product_tag_ids & required_tag_ids)
 
@@ -793,6 +793,7 @@ class Sales(models.Model):
         "auth.User", on_delete=models.CASCADE, verbose_name="User", null=True
     )
     sale_date = models.DateTimeField(auto_now_add=True, verbose_name="Sale Date")
+    last_modified = models.DateTimeField(auto_now=True, verbose_name="Last Modified")
     payment_method = models.CharField(
         max_length=50,
         choices=[
@@ -813,6 +814,14 @@ class Sales(models.Model):
         null=True,
         blank=True,
         help_text="Staff member who processed this sale (POS only, None for online sales)",
+    )
+    order = models.OneToOneField(
+        Order,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="Related Order",
+        help_text="Linked order (1 Order = 1 Sale)",
     )
 
     class Meta:
@@ -838,6 +847,24 @@ class SalesItem(models.Model):
         null=True,
     )
     quantity_sold = models.IntegerField(verbose_name="Quantity Sold")
+    refunded_quantity = models.IntegerField(
+        default=0,
+        verbose_name="Refunded Quantity",
+        help_text="Number of units refunded for this item",
+    )
+    refunded = models.BooleanField(
+        default=False,
+        verbose_name="Refunded",
+        help_text="True if all units of this item have been refunded",
+    )
+    supplier_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        verbose_name="Supplier Price",
+        null=True,
+        blank=True,
+        help_text="Supplier price at time of sale (snapshot, doesn't change)",
+    )
     amount = models.DecimalField(
         max_digits=10,
         decimal_places=2,

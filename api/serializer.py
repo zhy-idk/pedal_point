@@ -532,7 +532,7 @@ class SalesItemSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = SalesItem
-        fields = ["id", "product", "quantity_sold", "amount"]
+        fields = ["id", "product", "quantity_sold", "refunded_quantity", "refunded", "supplier_price", "amount"]
 
 
 class SalesSerializer(serializers.ModelSerializer):
@@ -540,10 +540,12 @@ class SalesSerializer(serializers.ModelSerializer):
     salesperson = UsernameSerializer(read_only=True)
     sales_item = SalesItemSerializer(many=True, read_only=True)
     total_amount = serializers.SerializerMethodField()
+    net_revenue = serializers.SerializerMethodField()
+    capital = serializers.SerializerMethodField()
     
     class Meta:
         model = Sales
-        fields = ["id", "user", "sale_date", "payment_method", "salesperson", "sales_item", "total_amount"]
+        fields = ["id", "user", "sale_date", "last_modified", "payment_method", "salesperson", "order", "sales_item", "total_amount", "net_revenue", "capital"]
     
     def get_total_amount(self, obj):
         # Sum up all item amounts (positive for sales, negative for refunds)
@@ -556,6 +558,22 @@ class SalesSerializer(serializers.ModelSerializer):
                 # Fallback for old records without amount
                 total += float(item.product.price) * item.quantity_sold
         return total
+    
+    def get_net_revenue(self, obj):
+        """Calculate net revenue (total - capital cost)"""
+        total = self.get_total_amount(obj)
+        capital = self.get_capital(obj)
+        return total - capital
+    
+    def get_capital(self, obj):
+        """Calculate total capital cost (supplier prices * quantities)"""
+        capital = 0
+        for item in obj.sales_item.all():
+            if item.supplier_price is not None:
+                # Only count non-refunded quantities
+                non_refunded_qty = item.quantity_sold - item.refunded_quantity
+                capital += float(item.supplier_price) * non_refunded_qty
+        return capital
 
 
 class ScheduleQueueSerializer(serializers.ModelSerializer):

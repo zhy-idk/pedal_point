@@ -148,7 +148,8 @@ urlpatterns = [
         views.get_top_selling_products,
         name="get_top_selling_products",
     ),
-    path("sales/refund/", views.create_refund, name="create_refund"),
+    path("sales/<int:sale_id>/refund/", views.refund_full_sale, name="refund_full_sale"),
+    path("sales/<int:sale_id>/items/<int:item_id>/refund/", views.refund_sale_item, name="refund_sale_item"),
     # User Management
     path("users/", views.get_all_users, name="get_all_users"),
     path("users/<int:user_id>/", views.get_user, name="get_user"),

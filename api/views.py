@@ -842,12 +842,14 @@ def pos_sale(request):
                 quantity = int(item["quantity"])
                 item_amount = float(product.price) * quantity
 
-                # Record sale item with amount
+                # Record sale item with amount and supplier price
+                supplier_price = product.supplier_price if product.supplier_price is not None else 0
                 SalesItem.objects.create(
                     sales=sale,
                     product=product,
                     quantity_sold=quantity,
                     amount=item_amount,
+                    supplier_price=supplier_price,
                 )
 
                 # Update product stock if available
@@ -1043,15 +1045,19 @@ def update_order_status(request, order_id):
                     sale_payment_method = "cash"  # Default to cash for other methods
 
                 sale = Sales.objects.create(
-                    user=order.user, payment_method=sale_payment_method
+                    user=order.user, 
+                    payment_method=sale_payment_method,
+                    order=order  # Link order to sale
                 )
                 for item in order.items.select_related("product").all():
                     item_amount = float(item.product.price) * item.quantity
+                    supplier_price = item.product.supplier_price if item.product.supplier_price is not None else 0
                     SalesItem.objects.create(
                         sales=sale,
                         product=item.product,
                         quantity_sold=item.quantity,
                         amount=item_amount,
+                        supplier_price=supplier_price,
                     )
             except Exception as e:
                 logger.error(f"Failed to record sale for order {order.id}: {str(e)}")
@@ -1123,89 +1129,189 @@ def get_top_selling_products(request):
 
 
 @api_view(["POST"])
-def create_refund(request):
-    """Create a refund by recording negative sale items"""
-    user = request.user
-
-    # Check if user is staff
-    if not user.is_staff:
+@permission_classes([IsAuthenticated])
+def refund_full_sale(request, sale_id):
+    """Refund an entire sale - all items will be marked as refunded"""
+    if not request.user.is_staff:
         return Response(
             {"error": "Staff access required"}, status=status.HTTP_403_FORBIDDEN
         )
 
     try:
-        # Get refund data from request
-        items = request.data.get("items", [])
-        payment_method = request.data.get("payment_method", "cash")
+        sale = Sales.objects.prefetch_related("sales_item__product", "order").get(id=sale_id)
         reason = request.data.get("reason", "")
+        notes = request.data.get("notes", "")
 
-        if not items:
+        # Check if already fully refunded
+        all_refunded = all(item.refunded for item in sale.sales_item.all())
+        if all_refunded:
             return Response(
-                {"error": "No items to refund"}, status=status.HTTP_400_BAD_REQUEST
+                {"error": "All items in this sale have already been refunded"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Create a Sales record for this refund
-        # Set salesperson to the staff member processing the refund
-        sale = Sales.objects.create(
-            user=user, 
-            payment_method=payment_method,
-            salesperson=request.user  # Staff member who processed this refund
-        )
+        # Calculate total refund amount for non-refunded items only
+        total_refund_amount = 0
+        for item in sale.sales_item.all():
+            if not item.refunded:
+                remaining_qty = item.quantity_sold - item.refunded_quantity
+                if remaining_qty > 0:
+                    item_price = float(item.amount) / item.quantity_sold if item.quantity_sold > 0 else float(item.product.price)
+                    total_refund_amount += item_price * remaining_qty
 
-        # Process refund items (negative amounts)
-        total_refund = 0
-        for item in items:
+        # Process PayMongo refund if payment is not cash
+        if sale.payment_method != "cash" and sale.order and sale.order.paymongo_payment_id:
             try:
-                product = Product.objects.get(id=item["product_id"])
-                quantity = int(item["quantity"])
-                refund_amount = -abs(
-                    float(item.get("amount", float(product.price) * quantity))
+                from .paymongo_service import PayMongoService
+                paymongo_service = PayMongoService()
+                refund_result = paymongo_service.create_refund(
+                    payment_id=sale.order.paymongo_payment_id,
+                    amount=total_refund_amount,
+                    reason=reason or "requested_by_customer"
                 )
-
-                # Record refund as negative sale item
-                SalesItem.objects.create(
-                    sales=sale,
-                    product=product,
-                    quantity_sold=-abs(quantity),  # Negative quantity for refunds
-                    amount=refund_amount,
-                )
-
-                # Restore product stock if available
-                if hasattr(product, "stock") and product.stock is not None:
-                    product.stock += abs(quantity)
-                    product.save()
-
-                total_refund += refund_amount
-
-            except Product.DoesNotExist:
-                sale.delete()
+                if "error" in refund_result:
+                    return Response(
+                        {"error": f"PayMongo refund failed: {refund_result.get('error')}"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            except Exception as e:
+                logger.error(f"PayMongo refund error: {str(e)}")
                 return Response(
-                    {"error": f'Product with ID {item["product_id"]} not found'},
-                    status=status.HTTP_400_BAD_REQUEST,
+                    {"error": f"Failed to process PayMongo refund: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
-        # Send notification
-        send_notification(
-            user.id,
-            {
-                "type": "refund_processed",
-                "message": f"Refund #{sale.id} processed - ₱{abs(total_refund):.2f}",
-                "sale_id": sale.id,
-                "refund_amount": total_refund,
-            },
-        )
+        # Update all non-refunded items
+        refunded_items = []
+        for item in sale.sales_item.all():
+            if not item.refunded:
+                remaining_qty = item.quantity_sold - item.refunded_quantity
+                if remaining_qty > 0:
+                    item.refunded_quantity = item.quantity_sold
+                    item.refunded = True
+                    item.save()
+                    refunded_items.append(item)
+
+        # Update sale's last_modified timestamp
+        sale.save()
 
         return Response(
             {
                 "success": True,
                 "sale_id": sale.id,
-                "refund_amount": total_refund,
-                "message": f"Refund processed successfully! Refund #{sale.id}",
+                "message": f"Full refund processed for sale #{sale.id}",
+                "refunded_items": len(refunded_items),
             },
-            status=status.HTTP_201_CREATED,
+            status=status.HTTP_200_OK,
         )
 
+    except Sales.DoesNotExist:
+        return Response(
+            {"error": "Sale not found"}, status=status.HTTP_404_NOT_FOUND
+        )
     except Exception as e:
+        logger.error(f"Refund full sale error: {str(e)}")
+        return Response(
+            {"error": f"Failed to process refund: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def refund_sale_item(request, sale_id, item_id):
+    """Refund a specific quantity of a sale item"""
+    if not request.user.is_staff:
+        return Response(
+            {"error": "Staff access required"}, status=status.HTTP_403_FORBIDDEN
+        )
+
+    try:
+        sale = Sales.objects.prefetch_related("sales_item__product", "order").get(id=sale_id)
+        sale_item = sale.sales_item.get(id=item_id)
+        refund_quantity = int(request.data.get("quantity", 0))
+        reason = request.data.get("reason", "")
+        notes = request.data.get("notes", "")
+
+        # Validate refund quantity
+        if refund_quantity <= 0:
+            return Response(
+                {"error": "Refund quantity must be greater than 0"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check if item is already fully refunded
+        if sale_item.refunded:
+            return Response(
+                {"error": "This item has already been fully refunded"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check available quantity to refund
+        available_qty = sale_item.quantity_sold - sale_item.refunded_quantity
+        if refund_quantity > available_qty:
+            return Response(
+                {"error": f"Cannot refund {refund_quantity} units. Only {available_qty} units remaining."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Calculate refund amount
+        item_price = float(sale_item.amount) / sale_item.quantity_sold if sale_item.quantity_sold > 0 else float(sale_item.product.price)
+        refund_amount = item_price * refund_quantity
+
+        # Process PayMongo refund if payment is not cash
+        if sale.payment_method != "cash" and sale.order and sale.order.paymongo_payment_id:
+            try:
+                from .paymongo_service import PayMongoService
+                paymongo_service = PayMongoService()
+                refund_result = paymongo_service.create_refund(
+                    payment_id=sale.order.paymongo_payment_id,
+                    amount=refund_amount,
+                    reason=reason or "requested_by_customer"
+                )
+                if "error" in refund_result:
+                    return Response(
+                        {"error": f"PayMongo refund failed: {refund_result.get('error')}"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            except Exception as e:
+                logger.error(f"PayMongo refund error: {str(e)}")
+                return Response(
+                    {"error": f"Failed to process PayMongo refund: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        # Update sale item
+        sale_item.refunded_quantity += refund_quantity
+        if sale_item.refunded_quantity >= sale_item.quantity_sold:
+            sale_item.refunded = True
+        sale_item.save()
+
+        # Update sale's last_modified timestamp
+        sale.save()
+
+        return Response(
+            {
+                "success": True,
+                "sale_id": sale.id,
+                "item_id": item_id,
+                "refund_quantity": refund_quantity,
+                "refund_amount": refund_amount,
+                "message": f"Refunded {refund_quantity} unit(s) for item",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except Sales.DoesNotExist:
+        return Response(
+            {"error": "Sale not found"}, status=status.HTTP_404_NOT_FOUND
+        )
+    except SalesItem.DoesNotExist:
+        return Response(
+            {"error": "Sale item not found"}, status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Refund sale item error: {str(e)}")
         return Response(
             {"error": f"Failed to process refund: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,

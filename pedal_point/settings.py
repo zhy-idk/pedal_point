@@ -333,6 +333,9 @@ SOCIALACCOUNT_PROVIDERS = {
     },
 }
 
+# Custom SocialAccountAdapter to handle multiple SocialApp entries
+SOCIALACCOUNT_ADAPTER = "pedal_point.socialaccount_adapter.CustomSocialAccountAdapter"
+
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",  # default Django auth
     "allauth.account.auth_backends.AuthenticationBackend",  # Allauth

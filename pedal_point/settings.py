@@ -193,132 +193,57 @@ STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 
-# Google Cloud Storage Settings
+# Google Cloud Storage Settings (simplified, reliable)
 USE_GCS = os.getenv("USE_GCS", "False") == "True"
 
 if USE_GCS:
     import json
     from google.oauth2 import service_account
-    
-    # GCS Settings
+
     GS_BUCKET_NAME = os.getenv("GS_BUCKET_NAME")
-    GS_PROJECT_ID = os.getenv("GS_PROJECT_ID")
-    
-    # Handle credentials - can be either JSON string (cloud) or file path (local)
-    GS_CREDENTIALS_JSON = os.getenv("GS_CREDENTIALS_JSON")  # JSON content as string
-    GS_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")  # Path to service account JSON
-    
-    if GS_CREDENTIALS_JSON:
-        # If credentials are provided as JSON string (common in cloud platforms like Render)
-        try:
-            credentials_dict = json.loads(GS_CREDENTIALS_JSON)
-            GS_CREDENTIALS = service_account.Credentials.from_service_account_info(credentials_dict)
-            print("GCS: Using credentials from GS_CREDENTIALS_JSON environment variable")
-        except (json.JSONDecodeError, Exception) as e:
-            print(f"ERROR: Failed to parse GS_CREDENTIALS_JSON: {e}")
-            GS_CREDENTIALS = None
-    elif GS_CREDENTIALS_PATH:
-        # Try to find the credentials file - handle both absolute and relative paths
-        credential_file = None
-        
-        # Extract just the filename if full path is provided
-        filename = os.path.basename(GS_CREDENTIALS_PATH)
-        
-        # List of paths to try (in order of preference)
-        paths_to_try = [
-            # Render's secret files location
-            Path("/etc/secrets") / filename,
-            # Path as-is (absolute path)
-            Path(GS_CREDENTIALS_PATH) if os.path.isabs(GS_CREDENTIALS_PATH) else None,
-            # Relative to BASE_DIR (project root)
-            BASE_DIR / GS_CREDENTIALS_PATH,
-            # Just filename relative to BASE_DIR
-            BASE_DIR / filename,
-            # In pedal_point directory (where settings.py is)
-            BASE_DIR / "pedal_point" / filename,
-            # Same directory as settings.py
-            Path(__file__).parent / GS_CREDENTIALS_PATH,
-            Path(__file__).parent / filename,
-            # Try pedal_point subdirectory
-            BASE_DIR / "pedal_point" / GS_CREDENTIALS_PATH,
-        ]
-        
-        # Filter out None values and check each path
-        for path in paths_to_try:
-            if path is None:
-                continue
-            try:
-                abs_path = Path(path).resolve()
-                if abs_path.exists() and abs_path.is_file():
-                    credential_file = abs_path
-                    print(f"GCS: Found credentials file at: {credential_file}")
-                    break
-            except Exception:
-                continue
-        
-        if credential_file and os.path.exists(credential_file):
-            # Verify the credentials file is valid JSON
-            try:
-                with open(credential_file, 'r') as f:
-                    cred_data = json.load(f)
-                    # Basic validation - check for required fields
-                    if 'type' not in cred_data or cred_data.get('type') != 'service_account':
-                        print(f"WARNING: Credentials file may not be a valid service account key")
-                    print(f"GCS: Credentials file validated. Service account: {cred_data.get('client_email', 'N/A')}")
-            except json.JSONDecodeError as e:
-                print(f"ERROR: Credentials file is not valid JSON: {e}")
-                credential_file = None
-            except Exception as e:
-                print(f"WARNING: Could not validate credentials file: {e}")
-            
-            if credential_file:
-                # Use absolute path for GS_CREDENTIALS
-                GS_CREDENTIALS = str(credential_file.resolve())
-                # Also update GOOGLE_APPLICATION_CREDENTIALS env var for Google Cloud libraries
-                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GS_CREDENTIALS
-                print(f"GCS: Using credentials from file: {GS_CREDENTIALS}")
-                print(f"GCS: Set GOOGLE_APPLICATION_CREDENTIALS={GS_CREDENTIALS}")
-            else:
-                GS_CREDENTIALS = None
-        else:
-            print(f"ERROR: GCS credentials file not found: {GS_CREDENTIALS_PATH}")
-            print(f"  Searched in {len(paths_to_try)} locations:")
-            for i, path in enumerate(paths_to_try, 1):
-                if path is not None:
-                    print(f"    {i}. {path}")
-            GS_CREDENTIALS = None
-    else:
-        # Try to use default credentials from environment (for GCP environments)
-        print("GCS: No explicit credentials found. Using default credentials if available.")
-        GS_CREDENTIALS = None
-    
+    GS_PROJECT_ID = os.getenv("GS_PROJECT_ID")  # optional
+    cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+
+    # Resolve credential path to an absolute file path
+    resolved_cred_path = None
+    if cred_path:
+        potential = Path(cred_path)
+        if not potential.is_absolute():
+            # Try relative to BASE_DIR first
+            potential = (BASE_DIR / potential).resolve()
+            if not potential.exists():
+                # Also try inside the app directory (useful when running from project root)
+                alt = (BASE_DIR / "pedal_point" / Path(cred_path).name).resolve()
+                potential = alt if alt.exists() else potential
+        if potential.exists() and potential.is_file():
+            resolved_cred_path = str(potential)
+
     if not GS_BUCKET_NAME:
-        print("ERROR: GS_BUCKET_NAME not set. GCS storage will not work correctly.")
-    else:
-        print(f"GCS: Bucket name: {GS_BUCKET_NAME}")
-    
-    if not GS_PROJECT_ID:
-        print("WARNING: GS_PROJECT_ID not set. Some GCS operations may fail.")
-    else:
-        print(f"GCS: Project ID: {GS_PROJECT_ID}")
-    
-    # Verify credentials are set
-    if GS_CREDENTIALS:
-        print(f"GCS: Credentials configured: {type(GS_CREDENTIALS)}")
-    else:
-        print("WARNING: GS_CREDENTIALS is None. Uploads may fail if default credentials are not available.")
-    
-    # Media files storage - use custom storage backend with explicit public ACL
-    DEFAULT_FILE_STORAGE = "pedal_point.storage.PublicGoogleCloudStorage"
-    GS_DEFAULT_ACL = "publicRead"
-    GS_FILE_OVERWRITE = False
-    GS_MAX_MEMORY_SIZE = 5242880  # 5MB
-    
-    # Media URL will be served from GCS
+        raise RuntimeError("GS_BUCKET_NAME is required when USE_GCS=True")
+
+    if not resolved_cred_path:
+        raise RuntimeError(
+            "GOOGLE_APPLICATION_CREDENTIALS must point to a valid service account JSON file"
+        )
+
+    # Create credentials object for django-storages
+    GS_CREDENTIALS = service_account.Credentials.from_service_account_file(
+        resolved_cred_path
+    )
+
+    # Ensure Google libs also see the same path (helpful for ancillary libs)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = resolved_cred_path
+
+    # Use built-in backend (no custom subclassing). Public URLs without signed querystrings.
+    DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
+    GS_DEFAULT_ACL = None  # Use bucket-level permissions (recommended; UBLA compatible)
+    GS_QUERYSTRING_AUTH = False  # Public URLs
+    GS_FILE_OVERWRITE = False    # Don't overwrite files with same name
+    GS_LOCATION = ""            # Upload at bucket root
+    GS_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5MB
+
+    # Media URL will be served via public Google CDN domain
     MEDIA_URL = f"https://storage.googleapis.com/{GS_BUCKET_NAME}/"
-    
-    # Optional: Use GCS for static files too (recommended for production)
-    # STATICFILES_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
 else:
     # Local file storage (development)
     MEDIA_URL = "/media/"

@@ -52,14 +52,36 @@ def test_gcs_connection():
         print(f"Storage backend: {type(storage).__name__}")
         
         # Try to access bucket (this will fail if credentials are wrong)
-        if hasattr(storage, 'bucket'):
-            if storage.bucket:
-                print(f"✅ Bucket initialized: {storage.bucket.name}")
+        # django-storages lazy-loads the bucket, so we need to trigger it
+        try:
+            # Access bucket property to trigger initialization
+            if hasattr(storage, 'bucket'):
+                bucket = storage.bucket
+                if bucket:
+                    print(f"✅ Bucket initialized: {bucket.name}")
+                    # Try to list bucket to verify access
+                    try:
+                        blobs = list(bucket.list_blobs(max_results=1))
+                        print(f"✅ Can access bucket (listed {len(blobs)} blob(s))")
+                    except Exception as list_error:
+                        print(f"⚠️  Cannot list bucket contents: {list_error}")
+                        print(f"   This might indicate a permissions issue")
+                else:
+                    print("❌ Bucket is None - storage backend not properly initialized")
+                    return False
             else:
-                print("❌ Bucket is None - storage backend not properly initialized")
-                return False
-        else:
-            print("⚠️  Storage backend doesn't have 'bucket' attribute (may be lazy-loaded)")
+                print("⚠️  Storage backend doesn't have 'bucket' attribute")
+                # Try to trigger bucket initialization by accessing a property
+                try:
+                    _ = storage.bucket_name
+                    print(f"Bucket name from storage: {_}")
+                except Exception as e:
+                    print(f"Could not access bucket_name: {e}")
+        except Exception as bucket_error:
+            print(f"❌ ERROR accessing bucket: {bucket_error}")
+            import traceback
+            traceback.print_exc()
+            return False
         
         # Test upload
         print("\n" + "=" * 60)
@@ -71,15 +93,43 @@ def test_gcs_connection():
         
         print(f"Uploading test file to: {test_filename}")
         
-        # Save file
-        saved_name = storage.save(test_filename, ContentFile(test_content))
-        print(f"✅ File saved as: {saved_name}")
+        # Save file - wrap in try/except to catch actual errors
+        try:
+            print(f"Attempting to save file...")
+            saved_name = storage.save(test_filename, ContentFile(test_content))
+            print(f"✅ save() returned: {saved_name}")
+        except Exception as save_error:
+            print(f"❌ ERROR during save(): {save_error}")
+            import traceback
+            traceback.print_exc()
+            return False
         
-        # Verify file exists
-        if storage.exists(saved_name):
-            print(f"✅ File exists in storage: {saved_name}")
-        else:
-            print(f"❌ File does NOT exist in storage: {saved_name}")
+        # Verify file exists immediately after save
+        print(f"Checking if file exists in storage...")
+        try:
+            exists = storage.exists(saved_name)
+            print(f"storage.exists() returned: {exists}")
+            if exists:
+                print(f"✅ File exists in storage: {saved_name}")
+            else:
+                print(f"❌ File does NOT exist in storage: {saved_name}")
+                # Try to get more info about why it doesn't exist
+                try:
+                    # Try to access the bucket directly
+                    if hasattr(storage, 'bucket') and storage.bucket:
+                        blob = storage.bucket.blob(saved_name)
+                        print(f"Checking blob directly...")
+                        print(f"Blob exists: {blob.exists()}")
+                        if not blob.exists():
+                            print(f"Blob path: {saved_name}")
+                            print(f"Bucket name: {storage.bucket.name}")
+                except Exception as blob_error:
+                    print(f"Could not check blob directly: {blob_error}")
+                return False
+        except Exception as exists_error:
+            print(f"❌ ERROR checking if file exists: {exists_error}")
+            import traceback
+            traceback.print_exc()
             return False
         
         # Get URL

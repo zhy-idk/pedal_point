@@ -35,6 +35,21 @@ class PublicGoogleCloudStorage(GoogleCloudStorage):
         logger.info(f"GCS _save: Starting upload for {name}")
         print(f"GCS _save: Starting upload for {name}")
         
+        # Ensure bucket is initialized (django-storages lazy-loads it)
+        try:
+            if not hasattr(self, '_bucket') or not self._bucket:
+                print("GCS _save: Bucket not initialized, triggering initialization...")
+                # Access bucket property to trigger initialization
+                _ = self.bucket
+                print(f"GCS _save: Bucket initialized: {self.bucket.name if self.bucket else 'None'}")
+        except Exception as init_error:
+            error_msg = f"GCS bucket initialization failed: {init_error}"
+            logger.error(error_msg, exc_info=True)
+            print(f"ERROR: {error_msg}")
+            import traceback
+            traceback.print_exc()
+            raise RuntimeError(error_msg) from init_error
+        
         # Verify bucket is accessible before upload
         if not hasattr(self, 'bucket') or not self.bucket:
             error_msg = "GCS bucket is not initialized. Check your credentials and bucket name."
@@ -42,15 +57,41 @@ class PublicGoogleCloudStorage(GoogleCloudStorage):
             print(f"ERROR: {error_msg}")
             raise RuntimeError(error_msg)
         
+        print(f"GCS _save: Bucket name: {self.bucket.name}")
+        print(f"GCS _save: About to call parent _save() method...")
+        
         # Call parent save method to upload the file
         try:
+            # Rewind content if needed
+            if hasattr(content, 'seek'):
+                content.seek(0)
+            
             name = super()._save(name, content)
             logger.info(f"GCS _save: File uploaded successfully to {name}")
-            print(f"GCS _save: File uploaded successfully to {name}")
+            print(f"GCS _save: Parent _save() returned: {name}")
+            
+            # Immediately verify the blob exists
+            blob = self.bucket.blob(name)
+            if blob.exists():
+                print(f"GCS _save: ✅ Blob verified to exist: {name}")
+            else:
+                print(f"GCS _save: ⚠️  WARNING: Blob does not exist after parent _save()!")
+                # Try to get more info
+                try:
+                    # Check if blob was created with different name
+                    print(f"GCS _save: Checking bucket contents...")
+                    blobs = list(self.bucket.list_blobs(prefix=name.split('/')[0], max_results=10))
+                    print(f"GCS _save: Found {len(blobs)} blobs with prefix {name.split('/')[0]}")
+                    for b in blobs:
+                        print(f"  - {b.name}")
+                except Exception as list_err:
+                    print(f"GCS _save: Could not list blobs: {list_err}")
+                
         except Exception as upload_error:
             error_msg = f"ERROR: Failed to upload file {name}: {upload_error}"
-            logger.error(error_msg, exc_info=True)
+            logger.error(error_msg, getattr(upload_error, '__class__', type(upload_error)), exc_info=True)
             print(error_msg)
+            print(f"Error type: {type(upload_error)}")
             import traceback
             traceback.print_exc()
             raise

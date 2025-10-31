@@ -2,7 +2,12 @@
 Utility functions for the API app.
 """
 from django.utils import timezone
+from django.core.mail import send_mail
+from django.conf import settings
 from datetime import timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def send_reservation_notification(reservation, notification_type):
@@ -151,4 +156,164 @@ def check_reservation_access(product, user):
     
     # Product is available (no active reservations)
     return True, ""
+
+
+def send_order_completion_email(order):
+    """
+    Send email notification when an order is completed.
+    Only sends if user has email_order_updates enabled.
+    """
+    try:
+        from .models import UserProfile
+        
+        # Get user profile and check preference
+        try:
+            user_profile = UserProfile.objects.get(user=order.user)
+            if not user_profile.email_order_updates:
+                logger.info(f"Order completion email skipped for user {order.user.username} (preference disabled)")
+                return
+        except UserProfile.DoesNotExist:
+            # Default to True if profile doesn't exist
+            pass
+        
+        # Build email content
+        subject = f"Order #{order.id} Completed - PedalPoint"
+        
+        items_list = "\n".join([
+            f"- {item.product.name} ({item.product.variant_attribute or 'N/A'}) x {item.quantity}"
+            for item in order.items.select_related('product').all()
+        ])
+        
+        message = f"""Hello {order.user.get_full_name() or order.user.username},
+
+Your order #{order.id} has been completed!
+
+Order Details:
+{items_list}
+
+Order Date: {order.created_at.strftime('%B %d, %Y at %I:%M %p')}
+Status: {order.get_status_display()}
+Payment Method: {order.get_payment_method_display()}
+
+Thank you for shopping with PedalPoint!
+
+Best regards,
+PedalPoint Team
+"""
+        
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[order.user.email],
+            fail_silently=False,
+        )
+        logger.info(f"Order completion email sent to {order.user.email} for order #{order.id}")
+    except Exception as e:
+        logger.error(f"Failed to send order completion email for order #{order.id}: {str(e)}")
+
+
+def send_reservation_fulfillment_email(reservation):
+    """
+    Send email notification when a reservation is fulfilled (purchased).
+    Only sends if user has email_reservation_updates enabled.
+    """
+    try:
+        from .models import UserProfile
+        
+        # Get user profile and check preference
+        try:
+            user_profile = UserProfile.objects.get(user=reservation.user)
+            if not user_profile.email_reservation_updates:
+                logger.info(f"Reservation fulfillment email skipped for user {reservation.user.username} (preference disabled)")
+                return
+        except UserProfile.DoesNotExist:
+            # Default to True if profile doesn't exist
+            pass
+        
+        # Build email content
+        subject = f"Reservation Fulfilled - {reservation.product.name} - PedalPoint"
+        
+        message = f"""Hello {reservation.user.get_full_name() or reservation.user.username},
+
+Great news! Your reservation for {reservation.product.name} {reservation.product.variant_attribute or ''} has been fulfilled.
+
+Product Details:
+- Product: {reservation.product.name}
+- Variant: {reservation.product.variant_attribute or 'N/A'}
+- Brand: {reservation.product.brand.name if reservation.product.brand else 'N/A'}
+- Price: ₱{reservation.product.price:,.2f}
+
+Reservation Details:
+- Reserved: {reservation.created_at.strftime('%B %d, %Y')}
+- Fulfilled: {reservation.fulfilled_at.strftime('%B %d, %Y at %I:%M %p') if reservation.fulfilled_at else 'N/A'}
+
+Thank you for your patience!
+
+Best regards,
+PedalPoint Team
+"""
+        
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[reservation.user.email],
+            fail_silently=False,
+        )
+        logger.info(f"Reservation fulfillment email sent to {reservation.user.email} for reservation #{reservation.id}")
+    except Exception as e:
+        logger.error(f"Failed to send reservation fulfillment email for reservation #{reservation.id}: {str(e)}")
+
+
+def send_service_completion_email(service_queue):
+    """
+    Send email notification when a service appointment is completed.
+    Only sends if user has email_service_updates enabled.
+    """
+    try:
+        from .models import UserProfile
+        
+        if not service_queue.user:
+            logger.warning(f"Service completion email skipped - no user assigned to service #{service_queue.id}")
+            return
+        
+        # Get user profile and check preference
+        try:
+            user_profile = UserProfile.objects.get(user=service_queue.user)
+            if not user_profile.email_service_updates:
+                logger.info(f"Service completion email skipped for user {service_queue.user.username} (preference disabled)")
+                return
+        except UserProfile.DoesNotExist:
+            # Default to True if profile doesn't exist
+            pass
+        
+        # Build email content
+        subject = f"Service Appointment Completed - PedalPoint"
+        
+        message = f"""Hello {service_queue.user.get_full_name() or service_queue.user.username},
+
+Your service appointment has been completed!
+
+Service Details:
+- Service Date: {service_queue.queue_date.strftime('%B %d, %Y')}
+- Service Info: {service_queue.info}
+- Status: {service_queue.get_status_display()}
+
+Thank you for choosing PedalPoint for your bike service needs!
+
+Best regards,
+PedalPoint Team
+"""
+        
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[service_queue.user.email],
+            fail_silently=False,
+        )
+        logger.info(f"Service completion email sent to {service_queue.user.email} for service #{service_queue.id}")
+    except Exception as e:
+        logger.error(f"Failed to send service completion email for service #{service_queue.id}: {str(e)}")
 

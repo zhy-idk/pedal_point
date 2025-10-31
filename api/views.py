@@ -1059,6 +1059,10 @@ def update_order_status(request, order_id):
                         amount=item_amount,
                         supplier_price=supplier_price,
                     )
+                
+                # Send order completion email
+                from .utils import send_order_completion_email
+                send_order_completion_email(order)
             except Exception as e:
                 logger.error(f"Failed to record sale for order {order.id}: {str(e)}")
 
@@ -2437,10 +2441,19 @@ def update_queue_item(request, item_id):
 
     try:
         queue_item = ServiceQueue.objects.get(id=item_id)
+        old_status = queue_item.status
+        
         serializer = QueueSerializer(queue_item, data=request.data, partial=True)
 
         if serializer.is_valid():
             serializer.save()
+            
+            # Check if status changed to completed
+            queue_item.refresh_from_db()
+            if queue_item.status == "completed" and old_status != "completed":
+                from .utils import send_service_completion_email
+                send_service_completion_email(queue_item)
+            
             return Response(serializer.data)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -2969,6 +2982,24 @@ def user_info(request):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_user_profile(request):
+    """Get current user's profile information including notification preferences"""
+    try:
+        user = request.user
+        user_profile, created = UserProfile.objects.get_or_create(user=user)
+        
+        # Return user data with profile info
+        serializer = UserSerializer(user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
 def update_user_profile(request):
@@ -3010,6 +3041,14 @@ def update_user_profile(request):
         # Handle image upload
         if 'image' in request.FILES:
             user_profile.image = request.FILES['image']
+        
+        # Handle notification preferences
+        if 'email_order_updates' in request.data:
+            user_profile.email_order_updates = request.data['email_order_updates']
+        if 'email_reservation_updates' in request.data:
+            user_profile.email_reservation_updates = request.data['email_reservation_updates']
+        if 'email_service_updates' in request.data:
+            user_profile.email_service_updates = request.data['email_service_updates']
             
         user_profile.save()
         

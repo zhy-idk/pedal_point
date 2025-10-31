@@ -6,7 +6,7 @@ from .models import *
 class UserInfoSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
-        fields = ["address", "contact_number", "image"]
+        fields = ["address", "contact_number", "image", "email_order_updates", "email_reservation_updates", "email_service_updates"]
 
 
 class StaffPermissionsSerializer(serializers.ModelSerializer):

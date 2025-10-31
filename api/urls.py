@@ -235,6 +235,7 @@ urlpatterns = [
     path("payments/webhook/", views.paymongo_webhook, name="paymongo_webhook"),
     # User Info
     path("user_info/", views.user_info, name="user_info"),
+    path("user/profile/", views.get_user_profile, name="get_user_profile"),
     path("user/profile/update/", views.update_user_profile, name="update_user_profile"),
     # Order Cancellation
     path("orders/<int:order_id>/cancel/", views.cancel_order, name="cancel_order"),

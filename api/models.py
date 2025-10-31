@@ -50,6 +50,22 @@ class UserProfile(models.Model):
         null=True,
         verbose_name="User Profile Image",
     )
+    # Email notification preferences
+    email_order_updates = models.BooleanField(
+        default=True,
+        verbose_name="Order Update Notifications",
+        help_text="Receive emails when your orders are completed"
+    )
+    email_reservation_updates = models.BooleanField(
+        default=True,
+        verbose_name="Reservation Update Notifications",
+        help_text="Receive emails when your reservations are fulfilled"
+    )
+    email_service_updates = models.BooleanField(
+        default=True,
+        verbose_name="Service Update Notifications",
+        help_text="Receive emails when your service appointments are completed"
+    )
 
     def __str__(self):
         return f"{self.user.username}'s Profile {self.user.date_joined} {self.user.first_name} {self.user.last_name} {self.user.email}"
@@ -648,10 +664,14 @@ class ReservedProduct(models.Model):
     def fulfill_reservation(self):
         """Mark this reservation as fulfilled (user purchased the product)."""
         from django.utils import timezone
+        from .utils import send_reservation_fulfillment_email
 
         self.status = "fulfilled"
         self.fulfilled_at = timezone.now()
         self.save()
+        
+        # Send fulfillment email notification
+        send_reservation_fulfillment_email(self)
 
     def is_expired(self):
         """Check if this active reservation has expired."""

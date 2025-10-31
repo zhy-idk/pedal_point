@@ -1222,7 +1222,7 @@ def refund_full_sale(request, sale_id):
 def refund_sale_item(request, sale_id, item_id):
     """Refund a specific quantity of a sale item"""
     if not request.user.is_staff:
-        return Response(
+                return Response(
             {"error": "Staff access required"}, status=status.HTTP_403_FORBIDDEN
         )
 
@@ -1237,8 +1237,8 @@ def refund_sale_item(request, sale_id, item_id):
         if refund_quantity <= 0:
             return Response(
                 {"error": "Refund quantity must be greater than 0"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         # Check if item is already fully refunded
         if sale_item.refunded:
@@ -1364,15 +1364,61 @@ def create_listing(request):
         )
 
     # Parse JSON arrays from FormData if they exist
-    data = request.data.copy()
-    if "compatibility_tag_ids" in data and isinstance(
-        data["compatibility_tag_ids"], str
-    ):
-        import json
-
-        data["compatibility_tag_ids"] = json.loads(
-            data["compatibility_tag_ids"]
-        )
+    # Convert QueryDict to regular dict for easier handling
+    if hasattr(request.data, 'dict'):
+        data = request.data.dict()
+    else:
+        data = dict(request.data)
+    
+    # Handle compatibility_tag_ids - it might come as JSON string or already parsed
+    if "compatibility_tag_ids" in data:
+        compatibility_tag_ids = data["compatibility_tag_ids"]
+        
+        # QueryDict might return a list even for single values, so get the first item if it's a list
+        if isinstance(compatibility_tag_ids, list):
+            if len(compatibility_tag_ids) > 0:
+                compatibility_tag_ids = compatibility_tag_ids[0]
+            else:
+                compatibility_tag_ids = None
+        
+        # If it's a string, try to parse as JSON
+        if isinstance(compatibility_tag_ids, str):
+            import json
+            try:
+                parsed = json.loads(compatibility_tag_ids)
+                # Ensure it's a list, not a dict or other type
+                if isinstance(parsed, list):
+                    data["compatibility_tag_ids"] = parsed
+                elif isinstance(parsed, dict):
+                    return Response(
+                        {"compatibility_tag_ids": ["Expected a list of items but got type 'dict'."]},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                else:
+                    data["compatibility_tag_ids"] = [parsed] if parsed is not None else []
+            except json.JSONDecodeError as e:
+                return Response(
+                    {"compatibility_tag_ids": [f"Invalid JSON: {str(e)}"]},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        # If it's already a list, ensure all items are integers
+        elif isinstance(compatibility_tag_ids, list):
+            try:
+                data["compatibility_tag_ids"] = [int(x) for x in compatibility_tag_ids]
+            except (ValueError, TypeError):
+                return Response(
+                    {"compatibility_tag_ids": ["All items must be integers"]},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        # If it's a dict, that's an error
+        elif isinstance(compatibility_tag_ids, dict):
+            return Response(
+                {"compatibility_tag_ids": ["Expected a list of items but got type 'dict'."]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        # If it's None or empty, convert to empty list
+        elif compatibility_tag_ids is None:
+            data["compatibility_tag_ids"] = []
 
     serializer = ProductListingSerializer(data=data)
     if serializer.is_valid():
@@ -1411,26 +1457,71 @@ def update_listing(request, listing_id):
         listing = ProductListing.objects.get(id=listing_id)
 
         # Parse JSON arrays from FormData if they exist
-        data = request.data.copy()
+        # Convert QueryDict to regular dict for easier handling
+        if hasattr(request.data, 'dict'):
+            data = request.data.dict()
+        else:
+            data = dict(request.data)
         
         print(f"DEBUG update_listing: Raw data keys: {list(data.keys())}")
         print(f"DEBUG update_listing: Raw compatibility_tag_ids: {data.get('compatibility_tag_ids')} (type: {type(data.get('compatibility_tag_ids'))})")
         
-        if "compatibility_tag_ids" in data and isinstance(
-            data["compatibility_tag_ids"], str
-        ):
-            import json
-            try:
-                data["compatibility_tag_ids"] = json.loads(
-                    data["compatibility_tag_ids"]
-                )
-                print(f"DEBUG update_listing: Parsed compatibility_tag_ids: {data['compatibility_tag_ids']}")
-            except json.JSONDecodeError as e:
-                print(f"DEBUG update_listing: JSON parse error: {e}")
+        # Handle compatibility_tag_ids - it might come as JSON string or already parsed
+        if "compatibility_tag_ids" in data:
+            compatibility_tag_ids = data["compatibility_tag_ids"]
+            
+            # QueryDict might return a list even for single values, so get the first item if it's a list
+            if isinstance(compatibility_tag_ids, list):
+                if len(compatibility_tag_ids) > 0:
+                    compatibility_tag_ids = compatibility_tag_ids[0]
+                else:
+                    compatibility_tag_ids = None
+            
+            # If it's a string, try to parse as JSON
+            if isinstance(compatibility_tag_ids, str):
+                import json
+                try:
+                    parsed = json.loads(compatibility_tag_ids)
+                    # Ensure it's a list, not a dict or other type
+                    if isinstance(parsed, list):
+                        data["compatibility_tag_ids"] = parsed
+                    elif isinstance(parsed, dict):
+                        # If it's a dict, that's an error
+                        print(f"DEBUG update_listing: compatibility_tag_ids parsed as dict: {parsed}")
+                        return Response(
+                            {"compatibility_tag_ids": ["Expected a list of items but got type 'dict'."]},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    else:
+                        # If it's not a list, try to convert to list
+                        data["compatibility_tag_ids"] = [parsed] if parsed is not None else []
+                    print(f"DEBUG update_listing: Parsed compatibility_tag_ids: {data['compatibility_tag_ids']} (type: {type(data['compatibility_tag_ids'])})")
+                except json.JSONDecodeError as e:
+                    print(f"DEBUG update_listing: JSON parse error: {e}")
+                    return Response(
+                        {"compatibility_tag_ids": [f"Invalid JSON: {str(e)}"]},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            # If it's already a list, ensure all items are integers
+            elif isinstance(compatibility_tag_ids, list):
+                # Ensure all items are integers
+                try:
+                    data["compatibility_tag_ids"] = [int(x) for x in compatibility_tag_ids]
+                except (ValueError, TypeError) as e:
+                    return Response(
+                        {"compatibility_tag_ids": ["All items must be integers"]},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            # If it's a dict, that's an error
+            elif isinstance(compatibility_tag_ids, dict):
+                print(f"DEBUG update_listing: compatibility_tag_ids is a dict: {compatibility_tag_ids}")
                 return Response(
-                    {"error": f"Invalid JSON in compatibility_tag_ids: {str(e)}"},
+                    {"compatibility_tag_ids": ["Expected a list of items but got type 'dict'."]},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            # If it's None or empty, convert to empty list
+            elif compatibility_tag_ids is None:
+                data["compatibility_tag_ids"] = []
 
         serializer = ProductListingSerializer(listing, data=data, partial=True)
 
@@ -2934,7 +3025,13 @@ def get_chat_rooms(request):
         chat_rooms = (
             ChatRoom.objects.filter(is_active=True)
             .select_related("owner")
-            .prefetch_related("chat_items")
+            .prefetch_related(
+                Prefetch(
+                    "chat_items",
+                    queryset=ChatItem.objects.select_related("sender").order_by("-sent_at"),
+                    to_attr="ordered_chat_items"
+                )
+            )
             .annotate(
                 message_count=Count("chat_items"),
                 last_message_time=Max("chat_items__sent_at"),
@@ -2955,10 +3052,12 @@ def get_chat_rooms(request):
             logger.info(f"Processing room {room.id} for owner {room.owner.username}")
 
             # Get the most recent message
-            latest_message = room.chat_items.order_by("-sent_at").first()
+            latest_message = room.chat_items.select_related("sender").order_by("-sent_at").first()
             print(
                 f"  Latest message: {latest_message.message if latest_message else 'None'}"
             )
+            if latest_message and latest_message.sender:
+                print(f"  Latest message sender: {latest_message.sender.username} (ID: {latest_message.sender.id})")
 
             # Get customer info
             customer_name = room.owner.get_full_name() or room.owner.username
@@ -2996,6 +3095,8 @@ def get_chat_rooms(request):
                 "last_message": latest_message.message
                 if latest_message
                 else "No messages yet",
+                "last_message_type": latest_message.message_type if latest_message else None,
+                "last_message_sender_id": latest_message.sender.id if latest_message and latest_message.sender else None,
                 "formatted_timestamp": formatted_timestamp,
                 "timestamp": latest_message.sent_at.strftime("%I:%M %p")
                 if latest_message

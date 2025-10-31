@@ -15,6 +15,7 @@ from api.models import (
 from decimal import Decimal
 import os
 import re
+import random
 from collections import defaultdict
 
 
@@ -254,16 +255,29 @@ class Command(BaseCommand):
                 
                 for idx, brand_name in enumerate(brand_list, start=1):
                     supplier_name = f"Supplier #{idx}"
+                    # Generate random 11-digit phone number starting with 09
+                    # Format: 09XXXXXXXXX (09 + 9 random digits = 11 total)
+                    random_digits = ''.join([str(random.randint(0, 9)) for _ in range(9)])
+                    phone_number = f"09{random_digits}"
+                    
                     supplier, created = ProductSupplier.objects.get_or_create(
                         name=supplier_name,
-                        defaults={'name': supplier_name}
+                        defaults={
+                            'name': supplier_name,
+                            'contact': phone_number
+                        }
                     )
+                    # Update contact if supplier already exists but doesn't have a phone number
+                    if not created and not supplier.contact:
+                        supplier.contact = phone_number
+                        supplier.save()
+                    
                     brand_to_supplier[brand_name] = supplier
                     if created:
                         suppliers_created += 1
                     else:
                         suppliers_existing += 1
-                    self.stdout.write(f'  Brand "{brand_name}" -> {supplier_name}')
+                    self.stdout.write(f'  Brand "{brand_name}" -> {supplier_name} (Contact: {phone_number})')
 
                 # Process each brand
                 for brand_name, products in grouped_data.items():

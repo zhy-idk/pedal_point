@@ -13,13 +13,27 @@ class PublicGoogleCloudStorage(GoogleCloudStorage):
         """
         Save the file and explicitly set public read ACL.
         """
+        print(f"GCS _save: Starting upload for {name}")
+        
         # Call parent save method to upload the file
-        name = super()._save(name, content)
+        try:
+            name = super()._save(name, content)
+            print(f"GCS _save: File uploaded successfully to {name}")
+        except Exception as upload_error:
+            print(f"ERROR: Failed to upload file {name}: {upload_error}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         # Explicitly set public read ACL after upload
         try:
             # Get the blob object using the name (which is the path in the bucket)
             blob = self.bucket.blob(name)
+            
+            # Verify blob exists
+            if not blob.exists():
+                print(f"WARNING: Blob {name} does not exist after upload!")
+                return name
             
             # Check if uniform bucket-level access is enabled
             # If not, we can use ACLs
@@ -35,6 +49,7 @@ class PublicGoogleCloudStorage(GoogleCloudStorage):
                     print(f"GCS: Made blob public using make_public for {name}")
                 except Exception as make_public_error:
                     print(f"WARNING: Both ACL methods failed for {name}: {make_public_error}")
+                    # Don't fail - bucket-level IAM should handle public access
                     
         except Exception as e:
             print(f"WARNING: Failed to set public ACL for {name}: {e}")
@@ -42,6 +57,17 @@ class PublicGoogleCloudStorage(GoogleCloudStorage):
             traceback.print_exc()
             # Don't fail the upload if ACL setting fails
             # The file is still saved, just might not be publicly accessible
+        
+        # Verify the file exists and is accessible
+        try:
+            blob = self.bucket.blob(name)
+            if blob.exists():
+                print(f"GCS: Verified file exists at {name}")
+                print(f"GCS: File URL: {self.url(name)}")
+            else:
+                print(f"ERROR: File {name} does not exist after upload!")
+        except Exception as verify_error:
+            print(f"WARNING: Could not verify file existence: {verify_error}")
         
         return name
     

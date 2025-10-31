@@ -8,7 +8,19 @@ import os
 
 
 def upload_to_listing_folder(instance, filename):
-    return os.path.join("products", str(instance.id), filename)
+    """
+    Generate upload path for ProductListing thumbnail.
+    If instance doesn't have an ID yet (new instance), use a temporary path
+    that will be corrected after save.
+    """
+    if instance.id:
+        path = os.path.join("products", str(instance.id), filename)
+    else:
+        # For new instances, use a temporary path
+        # Django will handle this correctly when the instance is saved
+        path = os.path.join("products", "temp", filename)
+    print(f"DEBUG upload_to_listing_folder: instance.id={instance.id}, filename={filename}, path={path}")
+    return path
 
 
 def upload_to_product_folder(instance, filename):

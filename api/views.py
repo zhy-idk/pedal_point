@@ -1531,10 +1531,17 @@ def update_listing(request, listing_id):
             elif compatibility_tag_ids is None:
                 data["compatibility_tag_ids"] = []
 
+        # Check if thumbnail/image is being uploaded
+        if 'image' in request.FILES:
+            print(f"DEBUG update_listing: Found thumbnail/image file: {request.FILES['image'].name} ({request.FILES['image'].size} bytes)")
+            data['image'] = request.FILES['image']
+        
         serializer = ProductListingSerializer(listing, data=data, partial=True)
 
         if serializer.is_valid():
+            print(f"DEBUG update_listing: Serializer is valid, saving listing {listing.id}")
             listing = serializer.save()
+            print(f"DEBUG update_listing: Listing saved. Thumbnail URL: {listing.image.url if listing.image else 'None'}")
 
             # Handle new product images
             for key in request.FILES.keys():

@@ -261,8 +261,8 @@ if USE_GCS:
     if not GS_BUCKET_NAME:
         print("WARNING: GS_BUCKET_NAME not set. GCS storage may not work correctly.")
     
-    # Media files storage
-    DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
+    # Media files storage - use custom storage backend with explicit public ACL
+    DEFAULT_FILE_STORAGE = "pedal_point.storage.PublicGoogleCloudStorage"
     GS_DEFAULT_ACL = "publicRead"
     GS_FILE_OVERWRITE = False
     GS_MAX_MEMORY_SIZE = 5242880  # 5MB

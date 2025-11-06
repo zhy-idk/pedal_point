@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+from google.oauth2 import service_account
 import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -176,7 +177,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = "Asia/Singapore"
 
 USE_I18N = True
 
@@ -186,6 +187,29 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
+        "OPTIONS": {
+            "project_id": os.getenv("GS_PROJECT_ID"),
+            "credentials": service_account.Credentials.from_service_account_file(
+                os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            ),
+            "bucket_name": os.getenv("GS_BUCKET_NAME"),
+            "location": "media",
+            "file_overwrite": False,
+        },
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+
+
+# Media files configuration
+GS_BUCKET_NAME = STORAGES["default"]["OPTIONS"]["bucket_name"]
+MEDIA_URL = f"https://storage.googleapis.com/{GS_BUCKET_NAME}/"
+
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
@@ -193,61 +217,6 @@ STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 
-# Google Cloud Storage Settings (simplified, reliable)
-USE_GCS = os.getenv("USE_GCS", "False") == "True"
-
-if USE_GCS:
-    import json
-    from google.oauth2 import service_account
-
-    GS_BUCKET_NAME = os.getenv("GS_BUCKET_NAME")
-    GS_PROJECT_ID = os.getenv("GS_PROJECT_ID")  # optional
-    cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-
-    # Resolve credential path to an absolute file path
-    resolved_cred_path = None
-    if cred_path:
-        potential = Path(cred_path)
-        if not potential.is_absolute():
-            # Try relative to BASE_DIR first
-            potential = (BASE_DIR / potential).resolve()
-            if not potential.exists():
-                # Also try inside the app directory (useful when running from project root)
-                alt = (BASE_DIR / "pedal_point" / Path(cred_path).name).resolve()
-                potential = alt if alt.exists() else potential
-        if potential.exists() and potential.is_file():
-            resolved_cred_path = str(potential)
-
-    if not GS_BUCKET_NAME:
-        raise RuntimeError("GS_BUCKET_NAME is required when USE_GCS=True")
-
-    if not resolved_cred_path:
-        raise RuntimeError(
-            "GOOGLE_APPLICATION_CREDENTIALS must point to a valid service account JSON file"
-        )
-
-    # Create credentials object for django-storages
-    GS_CREDENTIALS = service_account.Credentials.from_service_account_file(
-        resolved_cred_path
-    )
-
-    # Ensure Google libs also see the same path (helpful for ancillary libs)
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = resolved_cred_path
-
-    # Use built-in backend (no custom subclassing). Public URLs without signed querystrings.
-    DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
-    GS_DEFAULT_ACL = None  # Use bucket-level permissions (recommended; UBLA compatible)
-    GS_QUERYSTRING_AUTH = False  # Public URLs
-    GS_FILE_OVERWRITE = False    # Don't overwrite files with same name
-    GS_LOCATION = ""            # Upload at bucket root
-    GS_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5MB
-
-    # Media URL will be served via public Google CDN domain
-    MEDIA_URL = f"https://storage.googleapis.com/{GS_BUCKET_NAME}/"
-else:
-    # Local file storage (development)
-    MEDIA_URL = "/media/"
-    MEDIA_ROOT = BASE_DIR / "media"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

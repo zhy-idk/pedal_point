@@ -25,12 +25,6 @@ urlpatterns = [
     # OTP-protected admin site
     path("admin/", otp_admin_site.urls),
     path("admin1/", admin.site.urls),
-    path("", include("pos.urls")),
-    path("inventory/", include("inventory.urls")),
-    path("chat/", include("chat.urls")),
-    path("service_queue/", include("service_queue.urls")),
-    path("order/", include("order.urls")),
-    path("manager/", include("manager.urls")),
     path("api/", include("api.urls")),
     path("tinymce/", include("tinymce.urls")),
     path("accounts/", include("allauth.urls")),

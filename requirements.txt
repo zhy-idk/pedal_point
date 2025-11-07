@@ -27,7 +27,6 @@ fido2==2.0.0
 hyperlink==21.0.0
 idna==3.10
 incremental==24.7.2
-jwt==1.4.0
 msgpack==1.1.1
 numpy==2.3.3
 oauthlib==3.3.1

@@ -156,6 +156,7 @@ urlpatterns = [
     path("users/<int:user_id>/update/", views.update_user, name="update_user"),
     path("users/<int:user_id>/delete/", views.delete_user, name="delete_user"),
     path("users/<int:user_id>/permissions/", views.update_staff_permissions, name="update_staff_permissions"),
+    path("audit-logs/", views.get_audit_logs, name="get_audit_logs"),
     # Compatibility Management
     path("compatibility/groups/create/", views.create_compatibility_group, name="create_compatibility_group"),
     path("compatibility/groups/<int:group_id>/update/", views.update_compatibility_group, name="update_compatibility_group"),

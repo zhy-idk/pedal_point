@@ -8,6 +8,8 @@ from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils.decorators import method_decorator
 from django.db.models import Count, Max, Q
+from django.core.paginator import Paginator
+from datetime import datetime
 from .models import *
 from .serializer import *
 from django.shortcuts import get_object_or_404
@@ -17,12 +19,36 @@ from .realtime_utils import (
     send_inventory_update,
     send_notification,
 )
+from .utils import create_audit_log
 import random
 from django.conf import settings
 from django.utils import timezone
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_iso_datetime(value: str, *, end_of_day: bool = False):
+    if not value:
+        return None
+
+    parsed = None
+
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            return None
+
+    if parsed and timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed)
+
+    if parsed and end_of_day:
+        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    return parsed
 
 
 def deduct_inventory_for_order(order):
@@ -234,13 +260,126 @@ def update_staff_permissions(request, user_id):
         serializer = StaffPermissionsSerializer(permissions, data=request.data, partial=True)
         
         if serializer.is_valid():
-            serializer.save()
+            updated_permissions = serializer.save()
+
+            create_audit_log(
+                actor=request.user,
+                action="update_staff_permissions",
+                module="user_management",
+                description=f"Updated staff permissions for {user.username}",
+                metadata={
+                    "user_id": user.id,
+                    "changes": serializer.validated_data,
+                },
+                target_object=updated_permissions,
+                request=request,
+            )
             return Response(serializer.data)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             
     except User.DoesNotExist:
         return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_audit_logs(request):
+    """Retrieve audit log entries for administrative review."""
+    if not request.user.is_superuser:
+        return Response(
+            {"error": "Superuser access required"}, status=status.HTTP_403_FORBIDDEN
+        )
+
+    logs = AuditLog.objects.select_related("actor").all()
+
+    module = request.query_params.get("module")
+    if module:
+        logs = logs.filter(module__iexact=module)
+
+    severity = request.query_params.get("severity")
+    if severity:
+        logs = logs.filter(severity__iexact=severity)
+
+    action = request.query_params.get("action")
+    if action:
+        logs = logs.filter(action__icontains=action)
+
+    actor_id = request.query_params.get("actor_id")
+    actor_query = request.query_params.get("actor")
+    if actor_id and actor_id.isdigit():
+        logs = logs.filter(actor_id=int(actor_id))
+    elif actor_query:
+        logs = logs.filter(
+            Q(actor__username__icontains=actor_query)
+            | Q(actor__first_name__icontains=actor_query)
+            | Q(actor__last_name__icontains=actor_query)
+        )
+
+    search = request.query_params.get("search")
+    if search:
+        logs = logs.filter(
+            Q(description__icontains=search)
+            | Q(action__icontains=search)
+            | Q(module__icontains=search)
+            | Q(target_object_repr__icontains=search)
+        )
+
+    start_date = _parse_iso_datetime(request.query_params.get("start_date"))
+    if start_date:
+        logs = logs.filter(created_at__gte=start_date)
+
+    end_date = _parse_iso_datetime(
+        request.query_params.get("end_date"), end_of_day=True
+    )
+    if end_date:
+        logs = logs.filter(created_at__lte=end_date)
+
+    page = request.query_params.get("page", "1")
+    page_size = request.query_params.get("page_size", "50")
+
+    try:
+        page_number = max(int(page), 1)
+    except ValueError:
+        page_number = 1
+
+    try:
+        per_page = min(max(int(page_size), 1), 200)
+    except ValueError:
+        per_page = 50
+
+    paginator = Paginator(logs, per_page)
+    current_page = paginator.get_page(page_number)
+
+    serializer = AuditLogSerializer(current_page.object_list, many=True)
+
+    available_modules = [
+        value
+        for value in AuditLog.objects.exclude(module="")
+        .order_by()
+        .values_list("module", flat=True)
+        .distinct()
+    ]
+    available_actions = [
+        value
+        for value in AuditLog.objects.order_by()
+        .values_list("action", flat=True)
+        .distinct()
+    ]
+
+    response_payload = {
+        "results": serializer.data,
+        "page": current_page.number,
+        "page_size": per_page,
+        "total_pages": paginator.num_pages,
+        "total_records": paginator.count,
+        "has_next": current_page.has_next(),
+        "has_previous": current_page.has_previous(),
+        "available_modules": available_modules,
+        "available_actions": available_actions,
+    }
+
+    return Response(response_payload, status=status.HTTP_200_OK)
 
 
 # Categories
@@ -878,6 +1017,29 @@ def pos_sale(request):
             },
         )
 
+        create_audit_log(
+            actor=user,
+            action="pos_sale",
+            module="sales",
+            description=f"Processed POS sale #{sale.id} ({payment_method})",
+            metadata={
+                "sale_id": sale.id,
+                "total_amount": round(total_amount, 2),
+                "payment_method": payment_method,
+                "customer_name": customer_name,
+                "customer_contact": customer_contact,
+                "items": [
+                    {
+                        "product_id": item.get("product_id"),
+                        "quantity": int(item.get("quantity", 0)),
+                    }
+                    for item in cart_items
+                ],
+            },
+            target_object=sale,
+            request=request,
+        )
+
         return Response(
             {
                 "success": True,
@@ -1199,6 +1361,29 @@ def refund_full_sale(request, sale_id):
         # Update sale's last_modified timestamp
         sale.save()
 
+        create_audit_log(
+            actor=request.user,
+            action="refund_full_sale",
+            module="sales",
+            description=f"Processed full refund for sale #{sale.id}",
+            metadata={
+                "sale_id": sale.id,
+                "refunded_items": [
+                    {
+                        "item_id": item.id,
+                        "product_id": item.product_id,
+                        "quantity_sold": item.quantity_sold,
+                    }
+                    for item in refunded_items
+                ],
+                "reason": reason,
+                "notes": notes,
+                "total_refund_amount": round(total_refund_amount, 2),
+            },
+            target_object=sale,
+            request=request,
+        )
+
         return Response(
             {
                 "success": True,
@@ -1293,6 +1478,24 @@ def refund_sale_item(request, sale_id, item_id):
 
         # Update sale's last_modified timestamp
         sale.save()
+
+        create_audit_log(
+            actor=request.user,
+            action="refund_sale_item",
+            module="sales",
+            description=f"Refunded {refund_quantity} unit(s) from sale #{sale.id}",
+            metadata={
+                "sale_id": sale.id,
+                "sale_item_id": sale_item.id,
+                "product_id": sale_item.product_id,
+                "refund_quantity": refund_quantity,
+                "refund_amount": round(refund_amount, 2),
+                "reason": reason,
+                "notes": notes,
+            },
+            target_object=sale_item,
+            request=request,
+        )
 
         return Response(
             {
@@ -2271,6 +2474,19 @@ def create_supplier(request):
             "has_low_stock": False,
         }
 
+        create_audit_log(
+            actor=request.user,
+            action="create_supplier",
+            module="suppliers",
+            description=f"Created supplier '{supplier.name}'",
+            metadata={
+                "supplier_id": supplier.id,
+                "contact": supplier.contact,
+            },
+            target_object=supplier,
+            request=request,
+        )
+
         return Response(supplier_data, status=status.HTTP_201_CREATED)
 
     except Exception as e:
@@ -2307,6 +2523,11 @@ def update_supplier(request, supplier_id):
                 {"error": "Supplier not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
+        original_data = {
+            "name": supplier.name,
+            "contact": supplier.contact,
+        }
+
         # Check if another supplier with same name already exists
         existing_supplier = (
             ProductSupplier.objects.filter(name__iexact=name)
@@ -2340,6 +2561,23 @@ def update_supplier(request, supplier_id):
             "total_stock_value": total_stock_value,
             "has_low_stock": low_stock_count > 0,
         }
+
+        create_audit_log(
+            actor=request.user,
+            action="update_supplier",
+            module="suppliers",
+            description=f"Updated supplier '{supplier.name}'",
+            metadata={
+                "supplier_id": supplier.id,
+                "original": original_data,
+                "updated": {
+                    "name": supplier.name,
+                    "contact": supplier.contact,
+                },
+            },
+            target_object=supplier,
+            request=request,
+        )
 
         return Response(supplier_data, status=status.HTTP_200_OK)
 
@@ -2377,8 +2615,25 @@ def delete_supplier(request, supplier_id):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        supplier_snapshot = {
+            "id": supplier.id,
+            "name": supplier.name,
+            "contact": supplier.contact,
+        }
         supplier_name = supplier.name
         supplier.delete()
+
+        create_audit_log(
+            actor=request.user,
+            action="delete_supplier",
+            module="suppliers",
+            description=f"Deleted supplier '{supplier_name}'",
+            severity="warning",
+            metadata={"supplier": supplier_snapshot},
+            target_object_id=supplier_snapshot["id"],
+            target_object_repr=supplier_snapshot["name"],
+            request=request,
+        )
 
         return Response(
             {"message": f"Supplier '{supplier_name}' has been deleted successfully"},
@@ -2632,6 +2887,32 @@ def update_inventory_item(request, product_id):
     try:
         product = Product.objects.get(pk=product_id)
         old_stock = product.stock
+        change_summary = {}
+
+        simple_fields = [
+            "stock",
+            "price",
+            "available",
+            "name",
+            "sku",
+            "variant_attribute",
+            "brand",
+            "supplier_id",
+        ]
+
+        for field in simple_fields:
+            if field in request.data:
+                value = request.data.get(field)
+                if isinstance(value, list):
+                    value = value[0] if value else None
+
+                if field == "available" and isinstance(value, str):
+                    change_summary[field] = value.lower() in ["1", "true", "yes", "on"]
+                else:
+                    change_summary[field] = value
+
+        if request.FILES:
+            change_summary["uploaded_images"] = [file.name for file in request.FILES.values()]
 
         # Update fields if provided
         if "stock" in request.data:
@@ -2698,6 +2979,19 @@ def update_inventory_item(request, product_id):
         serializer = ProductSerializer(product)
         send_inventory_update(serializer.data)
 
+        create_audit_log(
+            actor=request.user,
+            action="update_inventory_item",
+            module="inventory",
+            description=f"Updated inventory item #{product.id} - {product.name}",
+            metadata={
+                "product_id": product.id,
+                "changes": change_summary,
+            },
+            target_object=product,
+            request=request,
+        )
+
         return Response(serializer.data, status=status.HTTP_200_OK)
     except Product.DoesNotExist:
         return Response(status=status.HTTP_404_NOT_FOUND)
@@ -2763,6 +3057,23 @@ def create_inventory_item(request):
             updated_serializer = ProductSerializer(product)
             send_inventory_update(updated_serializer.data)
 
+            create_audit_log(
+                actor=request.user,
+                action="create_inventory_item",
+                module="inventory",
+                description=f"Created inventory item #{product.id} - {product.name}",
+                metadata={
+                    "product_id": product.id,
+                    "name": product.name,
+                    "brand_id": product.brand_id,
+                    "supplier_id": product.supply_id,
+                    "stock": product.stock,
+                    "price": float(product.price) if product.price is not None else None,
+                },
+                target_object=product,
+                request=request,
+            )
+
             return Response(updated_serializer.data, status=status.HTTP_201_CREATED)
         else:
             logger.error(f"Serializer validation failed: {serializer.errors}")
@@ -2779,12 +3090,29 @@ def delete_product_image(request, image_id):
     try:
         image = ProductVariantImage.objects.get(pk=image_id)
         product = image.product
+        image_name = image.image.name if image.image else ""
         image.delete()
 
         # Send realtime inventory update
         if product:
             serializer = ProductSerializer(product)
             send_inventory_update(serializer.data)
+
+        create_audit_log(
+            actor=request.user,
+            action="delete_inventory_image",
+            module="inventory",
+            description=f"Deleted product image #{image_id}",
+            severity="warning",
+            metadata={
+                "image_id": image_id,
+                "product_id": product.id if product else None,
+                "image_name": image_name,
+            },
+            target_object_id=image_id,
+            target_object_repr=image_name,
+            request=request,
+        )
 
         return Response(
             {"message": "Image deleted successfully"}, status=status.HTTP_200_OK
@@ -2805,6 +3133,21 @@ def delete_inventory_item(request, product_id):
         # Send realtime inventory update with deleted item info
         send_inventory_update(
             {"action": "deleted", "product_id": product_id, "data": product_data}
+        )
+
+        create_audit_log(
+            actor=request.user,
+            action="delete_inventory_item",
+            module="inventory",
+            description=f"Deleted inventory item #{product_id}",
+            severity="warning",
+            metadata={
+                "product_id": product_id,
+                "product_snapshot": product_data,
+            },
+            target_object_id=product_id,
+            target_object_repr=product_data.get("name", ""),
+            request=request,
         )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -2837,6 +3180,19 @@ def bulk_update_inventory(request):
 
     # Send realtime inventory update for all changes
     send_inventory_update({"action": "bulk_update", "data": updated_products})
+
+    create_audit_log(
+        actor=request.user,
+        action="bulk_update_inventory",
+        module="inventory",
+        description=f"Bulk updated {len(updated_products)} inventory item(s)",
+        metadata={
+            "requested_updates": updates,
+            "updated_product_ids": [item.get("id") for item in updated_products],
+            "applied_count": len(updated_products),
+        },
+        request=request,
+    )
 
     return Response({"updated_count": len(updated_products)}, status=status.HTTP_200_OK)
 

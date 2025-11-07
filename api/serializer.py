@@ -25,6 +25,40 @@ class StaffPermissionsSerializer(serializers.ModelSerializer):
         ]
 
 
+class AuditLogActorSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ["id", "username", "first_name", "last_name", "full_name"]
+
+    def get_full_name(self, obj):
+        if obj.first_name and obj.last_name:
+            return f"{obj.first_name} {obj.last_name}"
+        return obj.first_name or obj.last_name or obj.username
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    actor = AuditLogActorSerializer(read_only=True)
+
+    class Meta:
+        model = AuditLog
+        fields = [
+            "id",
+            "module",
+            "action",
+            "description",
+            "severity",
+            "metadata",
+            "target_object_id",
+            "target_object_repr",
+            "actor",
+            "ip_address",
+            "user_agent",
+            "created_at",
+        ]
+
+
 class UserSerializer(serializers.ModelSerializer):
     is_staff = serializers.BooleanField(read_only=True)
     is_superuser = serializers.BooleanField(read_only=True)

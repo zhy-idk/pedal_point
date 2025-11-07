@@ -1,13 +1,88 @@
 """
 Utility functions for the API app.
 """
-from django.utils import timezone
-from django.core.mail import send_mail
-from django.conf import settings
 from datetime import timedelta
+from typing import Any, Mapping, Optional
+
+from django.conf import settings
+from django.core.mail import send_mail
+from django.utils import timezone
+
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _get_client_ip(request) -> Optional[str]:
+    if not request:
+        return None
+
+    x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+    if x_forwarded_for:
+        return x_forwarded_for.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR")
+
+
+def create_audit_log(
+    *,
+    actor=None,
+    action: str,
+    module: str = "",
+    description: str = "",
+    severity: str = "info",
+    metadata: Optional[Mapping[str, Any]] = None,
+    target_object=None,
+    target_object_id: Optional[str] = None,
+    target_object_repr: Optional[str] = None,
+    request=None,
+    user_agent: Optional[str] = None,
+):
+    """Persist an audit log entry. Failures are swallowed but logged."""
+
+    if not action:
+        raise ValueError("Audit log action is required")
+
+    try:
+        from .models import AuditLog
+
+        # Resolve target metadata
+        resolved_target_id = target_object_id
+        resolved_target_repr = target_object_repr
+
+        if target_object is not None:
+            resolved_target_id = getattr(target_object, "pk", None) or resolved_target_id
+            resolved_target_repr = str(target_object)
+
+        # Ensure metadata is JSON-serialisable
+        safe_metadata: Mapping[str, Any]
+        if metadata is None:
+            safe_metadata = {}
+        elif isinstance(metadata, Mapping):
+            try:
+                # Convert values that are not JSON serialisable to strings
+                safe_metadata = {
+                    key: (value if isinstance(value, (str, int, float, bool, type(None), list, dict)) else str(value))
+                    for key, value in metadata.items()
+                }
+            except Exception:  # pragma: no cover - fallback safety
+                safe_metadata = {"data": str(metadata)}
+        else:
+            safe_metadata = {"data": str(metadata)}
+
+        AuditLog.objects.create(
+            actor=actor if getattr(actor, "is_authenticated", False) else None,
+            action=action,
+            module=module,
+            description=description,
+            severity=severity,
+            metadata=safe_metadata,
+            target_object_id=str(resolved_target_id) if resolved_target_id is not None else None,
+            target_object_repr=resolved_target_repr or "",
+            ip_address=_get_client_ip(request),
+            user_agent=user_agent or (request.META.get("HTTP_USER_AGENT") if request else ""),
+        )
+    except Exception as exc:  # pragma: no cover - logging should not break flow
+        logger.warning("Failed to write audit log for action '%s': %s", action, exc)
 
 
 def send_reservation_notification(reservation, notification_type):

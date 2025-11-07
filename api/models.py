@@ -1055,3 +1055,91 @@ class ChatItem(models.Model):
         elif self.message_type == "staff":
             self.chat_room.is_read_customer = False
             self.chat_room.save(update_fields=["is_read_customer"])
+
+
+class AuditLog(models.Model):
+    """Audit trail of staff actions performed in the system."""
+
+    class Severity(models.TextChoices):
+        INFO = "info", "Info"
+        WARNING = "warning", "Warning"
+        ERROR = "error", "Error"
+
+    actor = models.ForeignKey(
+        "auth.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_logs",
+        verbose_name="Actor",
+        help_text="User who performed the action (null for system events)",
+    )
+    module = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name="Module",
+        help_text="Feature area where the event occurred (e.g., inventory, sales)",
+    )
+    action = models.CharField(
+        max_length=150,
+        verbose_name="Action",
+        help_text="Short identifier describing what happened",
+    )
+    description = models.TextField(
+        blank=True,
+        verbose_name="Description",
+        help_text="Human-friendly summary of the event",
+    )
+    severity = models.CharField(
+        max_length=20,
+        choices=Severity.choices,
+        default=Severity.INFO,
+        verbose_name="Severity",
+    )
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="Metadata",
+        help_text="Structured details about the event",
+    )
+    target_object_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        verbose_name="Target Object ID",
+        help_text="Identifier of the affected object, if available",
+    )
+    target_object_repr = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Target Object",
+        help_text="Readable representation of the affected object",
+    )
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        verbose_name="IP Address",
+        help_text="Origin IP address when the action was performed",
+    )
+    user_agent = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="User Agent",
+        help_text="Browser or client that triggered the action",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Created At")
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Audit Log"
+        verbose_name_plural = "Audit Logs"
+        indexes = [
+            models.Index(fields=["-created_at"]),
+            models.Index(fields=["module"]),
+            models.Index(fields=["action"]),
+        ]
+
+    def __str__(self):
+        actor = self.actor.username if self.actor else "System"
+        module = self.module or "general"
+        return f"[{module}] {self.action} by {actor} @ {self.created_at:%Y-%m-%d %H:%M:%S}"

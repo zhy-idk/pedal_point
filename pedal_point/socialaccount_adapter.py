@@ -1,9 +1,16 @@
 """
 Custom SocialAccountAdapter to handle multiple SocialApp entries gracefully.
 """
+import os
+from urllib.parse import urlparse
+
+import requests
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from allauth.socialaccount.models import SocialApp
 from django.core.exceptions import MultipleObjectsReturned
+from django.core.files.base import ContentFile
+
+from pedal_point.api.models import UserProfile
 
 
 class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
@@ -42,4 +49,58 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
                 apps = apps.filter(client_id=client_id)
             
             return apps.first()
+
+    def save_user(self, request, sociallogin, form=None):
+        user = super().save_user(request, sociallogin, form=form)
+
+        extra_data = sociallogin.account.extra_data or {}
+        profile_image_url = self._extract_profile_image_url(sociallogin.account.provider, extra_data)
+
+        if profile_image_url:
+            self._update_user_profile_image(user, profile_image_url)
+
+        return user
+
+    def _extract_profile_image_url(self, provider, extra_data):
+        try:
+            if provider == "google":
+                return extra_data.get("picture")
+            if provider == "facebook":
+                picture_data = extra_data.get("picture")
+                if isinstance(picture_data, dict):
+                    data = picture_data.get("data")
+                    if isinstance(data, dict):
+                        return data.get("url")
+            return None
+        except Exception:
+            return None
+
+    def _update_user_profile_image(self, user, image_url):
+        try:
+            response = requests.get(image_url, timeout=10)
+            response.raise_for_status()
+
+            file_name = self._build_image_filename(user, image_url)
+            content = ContentFile(response.content)
+
+            user_profile, created = UserProfile.objects.get_or_create(
+                user=user,
+                defaults={
+                    "address": "",
+                    "contact_number": "",
+                },
+            )
+
+            if created or not user_profile.image:
+                user_profile.image.save(file_name, content, save=True)
+        except Exception:
+            # Ignore errors silently to avoid blocking auth flow
+            pass
+
+    def _build_image_filename(self, user, image_url):
+        parsed = urlparse(image_url)
+        base_name = os.path.basename(parsed.path)
+        if not base_name:
+            base_name = f"{user.username or 'user'}_avatar.jpg"
+        return base_name
 

@@ -326,6 +326,13 @@ print(IS_PRODUCTION)
 DOMAIN = os.getenv("DOMAIN")
 # print(DOMAIN)
 
+# Proxy/SSL Configuration for Render.com (or other reverse proxies)
+# This tells Django to trust the X-Forwarded-Proto header from the proxy
+# so it knows when the original request was HTTPS
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+USE_X_FORWARDED_PORT = True
+
 # Cookie Settings - Environment Aware
 if IS_PRODUCTION:
     # Production (HTTPS) - SameSite=None requires Secure=True
@@ -343,7 +350,7 @@ else:
 # Cookie domain settings - MUST be None for cross-origin to work
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_PATH = "/"
-SESSION_COOKIE_DOMAIN = DOMAIN  # Don't set domain - let browser handle it
+SESSION_COOKIE_DOMAIN = None  # Must be None for cross-origin
 SESSION_COOKIE_AGE = 1209600  # 2 weeks
 
 CORS_ALLOW_CREDENTIALS = True
@@ -354,10 +361,12 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CSRF_COOKIE_HTTPONLY = False  # Must be False for JavaScript access
-CSRF_COOKIE_DOMAIN = DOMAIN  # Don't set domain - let browser handle it
+CSRF_COOKIE_DOMAIN = None  # Must be None for cross-origin
 CSRF_COOKIE_PATH = "/"
+CSRF_COOKIE_NAME = "csrftoken"  # Explicitly set the cookie name
 CSRF_USE_SESSIONS = False  # Important for API usage
-CSRF_TRUSTED_USE_REFERER = False
+CSRF_HEADER_NAME = "HTTP_X_CSRFTOKEN"  # Header name Django expects
+CSRF_COOKIE_AGE = 31449600  # 1 year
 
 ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]
@@ -387,23 +396,24 @@ CORS_ALLOW_ALL_ORIGINS = False  # Use CORS_ALLOWED_ORIGINS instead
 
 
 CSRF_TRUSTED_ORIGINS = [
+    # Local development
     "http://localhost:3000",
     "http://localhost:5173",
-    "https://pedalpoint-frontend.onrender.com",
-    "https://pedal-point.onrender.com",  # Backend URL (if different)
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173",
     "http://192.168.1.123:5173",
     "http://192.168.56.1:5173",
-    # Allow any local network IP for development
-    "http://*:5173",
-    "http://*:3000",
-    "http://*:8000",
-    # Environment-based frontend URL
-    FRONTEND_URL,
-    LOCAL_URL,
-    "https://pedalpoint.share.zrok.io",  # zrok frontend
+    # Production URLs
+    "https://pedalpoint-frontend.onrender.com",
+    "https://pedal-point.onrender.com",
+    "https://pedalpoint.share.zrok.io",
 ]
+
+# Add environment-based URLs if they're not already in the list
+if FRONTEND_URL and FRONTEND_URL not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append(FRONTEND_URL)
+if LOCAL_URL and LOCAL_URL not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append(LOCAL_URL)
 
 # Channels Configuration
 ASGI_APPLICATION = "pedal_point.asgi.application"

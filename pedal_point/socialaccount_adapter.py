@@ -7,10 +7,9 @@ from urllib.parse import urlparse
 import requests
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from allauth.socialaccount.models import SocialApp
+from django.apps import apps
 from django.core.exceptions import MultipleObjectsReturned
 from django.core.files.base import ContentFile
-
-from pedal_point.api.models import UserProfile
 
 
 class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
@@ -82,6 +81,8 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
 
             file_name = self._build_image_filename(user, image_url)
             content = ContentFile(response.content)
+
+            UserProfile = apps.get_model("api", "UserProfile")
 
             user_profile, created = UserProfile.objects.get_or_create(
                 user=user,

@@ -1,9 +1,9 @@
 from rest_framework.decorators import api_view, permission_classes, parser_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils.decorators import method_decorator
@@ -24,8 +24,204 @@ import random
 from django.conf import settings
 from django.utils import timezone
 import logging
+import csv
+from typing import List, Tuple
+import requests
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_listing_price(listing: ProductListing) -> float:
+    """Return the lowest available price for a listing."""
+    if listing.price:
+        try:
+            return float(listing.price)
+        except (TypeError, ValueError):
+            pass
+
+    variant_prices: List[float] = []
+    for product in listing.products.all():
+        try:
+            variant_prices.append(float(product.price))
+        except (TypeError, ValueError):
+            continue
+
+    return min(variant_prices) if variant_prices else 0.0
+
+
+def _tokenize(text: str) -> List[str]:
+    return [
+        token
+        for token in (
+            "".join(ch if ch.isalnum() or ch == " " else " " for ch in text.lower())
+        ).split()
+        if len(token) > 2
+    ]
+
+
+def _score_listing(listing: ProductListing, query_tokens: List[str]) -> int:
+    haystack_tokens = set(_tokenize(listing.name or ""))
+    if listing.category and listing.category.name:
+        haystack_tokens.update(_tokenize(listing.category.name))
+    if listing.description:
+        haystack_tokens.update(_tokenize(listing.description))
+
+    score = 0
+    for token in query_tokens:
+        if token in haystack_tokens:
+            score += 2
+        else:
+            if any(value.startswith(token[:4]) for value in haystack_tokens):
+                score += 1
+
+    return score
+
+
+def _select_candidate_listings(issue: str, limit: int = 12) -> List[Tuple[ProductListing, int]]:
+    """Pick the most relevant listings for a repair issue."""
+    query_tokens = _tokenize(issue)
+
+    listings_qs = (
+        ProductListing.objects.filter(available=True)
+        .select_related("category")
+        .prefetch_related("products")
+    )
+
+    scored_items: List[Tuple[ProductListing, int]] = []
+    for listing in listings_qs:
+        score = _score_listing(listing, query_tokens)
+        if score > 0 or not query_tokens:
+            scored_items.append((listing, score))
+
+    if not scored_items:
+        scored_items = [(listing, 0) for listing in listings_qs[:limit]]
+
+    scored_items.sort(
+        key=lambda item: (item[1], -_normalize_listing_price(item[0])), reverse=True
+    )
+    return scored_items[:limit]
+
+
+def _format_inventory_for_prompt(candidates: List[Tuple[ProductListing, int]]) -> str:
+    parts = []
+    for listing, score in candidates:
+        price = _normalize_listing_price(listing)
+        parts.append(
+            f"- {listing.name} | Category: {listing.category.name if listing.category else 'General'} | "
+            f"Price: ₱{price:,.0f} | Product URL: {listing.category.slug if listing.category else 'products'}/{listing.slug}"
+        )
+    return "\n".join(parts) if parts else "No closely matching inventory items were found."
+
+
+def _build_ai_prompt(
+    issue: str, bike_type: str, riding_style: str, budget: str, inventory_context: str
+) -> str:
+    budget_text = budget or "Not specified"
+    return f"""
+You are PedalPoint's AI repair estimator. Provide professional but friendly guidance based strictly on the official PedalPoint inventory provided below.
+
+Customer info:
+- Bike type: {bike_type}
+- Riding style: {riding_style}
+- Budget guidance: {budget_text}
+- Reported issue: {issue}
+
+Inventory items you may recommend (use exact names & prices, do not fabricate):
+{inventory_context}
+
+Instructions:
+1. Give a concise diagnosis (2-3 sentences max).
+2. Recommend up to 4 relevant parts. Use bullet points and include part name and price from the list above. If nothing matches, state that no exact parts are available and recommend a manual inspection.
+3. Provide an estimated total cost range using the recommended parts (include labor estimate of ₱300-600 unless the user says they will DIY).
+4. Suggest next steps (booking repair, diagnostic check, etc.).
+
+Formatting: Use Markdown with headings (### Diagnosis, ### Recommended Parts, ### Estimated Cost, ### Next Steps). Keep the response under 180 words.
+"""
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def repair_estimator(request):
+    """AI-backed repair estimator endpoint."""
+    payload = request.data or {}
+    issue = (payload.get("issue") or "").strip()
+    bike_type = (payload.get("bike_type") or "").strip() or "Unknown"
+    riding_style = (payload.get("riding_style") or "").strip() or "Unknown"
+    budget = (payload.get("budget") or "").strip()
+
+    if len(issue) < 20:
+        return Response(
+            {"error": "Issue description must be at least 20 characters."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    api_key = getattr(settings, "GEMINI_API_KEY", None)
+    model = getattr(settings, "GEMINI_MODEL", "gemini-2.0-flash-exp")
+    endpoint = getattr(
+        settings, "GEMINI_ENDPOINT", "https://generativelanguage.googleapis.com/v1beta/models"
+    )
+
+    if not api_key:
+        return Response(
+            {"error": "AI service not configured. Missing GEMINI_API_KEY."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        candidates = _select_candidate_listings(issue)
+        inventory_context = _format_inventory_for_prompt(candidates)
+        prompt = _build_ai_prompt(issue, bike_type, riding_style, budget, inventory_context)
+
+        response = requests.post(
+            f"{endpoint}/{model}:generateContent",
+            headers={"Content-Type": "application/json"},
+            params={"key": api_key},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=20,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        text = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        )
+
+        if not text:
+            logger.warning("AI response missing text payload: %s", data)
+            return Response(
+                {"error": "AI did not return a response. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        recommendations = [
+            {
+                "id": listing.id,
+                "name": listing.name,
+                "price": _normalize_listing_price(listing),
+                "category": listing.category.name if listing.category else "General",
+                "category_slug": listing.category.slug if listing.category else "products",
+                "slug": listing.slug,
+                "score": score,
+            }
+            for listing, score in candidates
+        ]
+
+        return Response({"ai_summary": text, "recommendations": recommendations})
+    except requests.RequestException as exc:
+        logger.error("Gemini API request failed: %s", exc, exc_info=True)
+        return Response(
+            {"error": "Failed to contact AI service. Please try again soon."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    except Exception as exc:
+        logger.error("Repair estimator failed: %s", exc, exc_info=True)
+        return Response(
+            {"error": "Unexpected error generating estimate."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 def _parse_iso_datetime(value: str, *, end_of_day: bool = False):
@@ -1248,6 +1444,132 @@ def get_sales(request):
     ).select_related("salesperson").order_by("-sale_date")
     serializer = SalesSerializer(sales, many=True)
     return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def export_sales(request):
+    """Export sales data as a CSV file (staff only)."""
+    if not request.user.is_staff:
+        return Response(
+            {"error": "Staff access required"}, status=status.HTTP_403_FORBIDDEN
+        )
+
+    sales = (
+        Sales.objects.prefetch_related(
+            "sales_item__product__product_listing",
+            "sales_item__product__brand",
+        )
+        .select_related("user", "salesperson", "order")
+        .order_by("-sale_date")
+    )
+
+    timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
+    response = HttpResponse(content_type="text/csv")
+    response[
+        "Content-Disposition"
+    ] = f'attachment; filename="sales_export_{timestamp}.csv"'
+
+    writer = csv.writer(response)
+    writer.writerow(
+        [
+            "Sale ID",
+            "Sale Date",
+            "Customer",
+            "Salesperson",
+            "Payment Method",
+            "Order ID",
+            "Product",
+            "Variant",
+            "Brand",
+            "Quantity Sold",
+            "Refunded Quantity",
+            "Item Amount",
+            "Supplier Price",
+            "Sale Total",
+            "Capital",
+            "Net Revenue",
+        ]
+    )
+
+    for sale in sales:
+        items = list(sale.sales_item.all())
+
+        sale_total = 0
+        sale_capital = 0
+        for item in items:
+            item_amount = (
+                float(item.amount)
+                if item.amount is not None
+                else (
+                    float(item.product.price) * item.quantity_sold
+                    if item.product and item.product.price is not None
+                    else 0
+                )
+            )
+            sale_total += item_amount
+            if item.supplier_price is not None:
+                non_refunded_qty = item.quantity_sold - item.refunded_quantity
+                sale_capital += float(item.supplier_price) * max(non_refunded_qty, 0)
+
+        sale_net_revenue = sale_total - sale_capital
+        base_row = [
+            sale.id,
+            timezone.localtime(sale.sale_date).strftime("%Y-%m-%d %H:%M:%S")
+            if sale.sale_date
+            else "",
+            sale.user.username if sale.user else "Walk-in Customer",
+            sale.salesperson.username if sale.salesperson else "",
+            sale.payment_method,
+            sale.order.id if sale.order else "",
+        ]
+
+        if not items:
+            writer.writerow(
+                base_row
+                + ["", "", "", "", "", "", f"{sale_total:.2f}", f"{sale_capital:.2f}", f"{sale_net_revenue:.2f}"]
+            )
+            continue
+
+        for item in items:
+            item_amount = (
+                float(item.amount)
+                if item.amount is not None
+                else (
+                    float(item.product.price) * item.quantity_sold
+                    if item.product and item.product.price is not None
+                    else 0
+                )
+            )
+            writer.writerow(
+                base_row
+                + [
+                    item.product.product_listing.name
+                    if item.product
+                    and item.product.product_listing
+                    and item.product.product_listing.name
+                    else item.product.name
+                    if item.product and item.product.name
+                    else "",
+                    item.product.variant_attribute
+                    if item.product and item.product.variant_attribute
+                    else "",
+                    item.product.brand.name
+                    if item.product and item.product.brand
+                    else "",
+                    item.quantity_sold,
+                    item.refunded_quantity,
+                    f"{item_amount:.2f}",
+                    f"{float(item.supplier_price):.2f}"
+                    if item.supplier_price is not None
+                    else "",
+                    f"{sale_total:.2f}",
+                    f"{sale_capital:.2f}",
+                    f"{sale_net_revenue:.2f}",
+                ]
+            )
+
+    return response
 
 
 @api_view(["GET"])

@@ -222,6 +222,13 @@ SITE_ID = 1
 # Get backend URL - django-allauth uses this to construct OAuth redirect URIs
 BACKEND_URL = os.getenv("BACKEND_URL", "https://pedal-point.onrender.com")
 
+# AI / Gemini configuration
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+GEMINI_ENDPOINT = os.getenv(
+    "GEMINI_ENDPOINT", "https://generativelanguage.googleapis.com/v1beta/models"
+)
+
 # Social Account Provider Settings
 SOCIALACCOUNT_PROVIDERS = {
     "google": {

@@ -159,6 +159,7 @@ urlpatterns = [
     ),
     # Sales
     path("sales/", views.get_sales, name="get_sales"),
+    path("sales/export/", views.export_sales, name="export_sales"),
     path(
         "sales/top-products/",
         views.get_top_selling_products,
@@ -322,6 +323,8 @@ urlpatterns = [
     path("chat/rooms/", views.get_chat_rooms, name="get_chat_rooms"),
     # Dashboard
     path("dashboard/", views.dashboard_data, name="dashboard_data"),
+    # Repair Estimator
+    path("repair-estimator/", views.repair_estimator, name="repair_estimator"),
     # Auth & Misc
     path("csrf/", views.get_csrf_token, name="get_csrf"),
     path("test", views.test_user),

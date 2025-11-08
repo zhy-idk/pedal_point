@@ -7,10 +7,26 @@ urlpatterns = [
     # Product Listings (formerly Product)
     # IMPORTANT: Specific patterns MUST come before generic slug pattern
     path("listings/create/", views.create_listing, name="create_listing"),
-    path("listings/unassigned-products/", views.get_unassigned_products, name="get_unassigned_products"),
-    path("listings/<int:listing_id>/assign-products/", views.assign_products_to_listing, name="assign_products_to_listing"),
-    path("listings/unassign-products/", views.unassign_products_from_listing, name="unassign_products_from_listing"),
-    path("listings/images/<int:image_id>/delete/", views.delete_listing_image, name="delete_listing_image"),
+    path(
+        "listings/unassigned-products/",
+        views.get_unassigned_products,
+        name="get_unassigned_products",
+    ),
+    path(
+        "listings/<int:listing_id>/assign-products/",
+        views.assign_products_to_listing,
+        name="assign_products_to_listing",
+    ),
+    path(
+        "listings/unassign-products/",
+        views.unassign_products_from_listing,
+        name="unassign_products_from_listing",
+    ),
+    path(
+        "listings/images/<int:image_id>/delete/",
+        views.delete_listing_image,
+        name="delete_listing_image",
+    ),
     path(
         "listings/<int:listing_id>/update/", views.update_listing, name="update_listing"
     ),
@@ -148,30 +164,88 @@ urlpatterns = [
         views.get_top_selling_products,
         name="get_top_selling_products",
     ),
-    path("sales/<int:sale_id>/refund/", views.refund_full_sale, name="refund_full_sale"),
-    path("sales/<int:sale_id>/items/<int:item_id>/refund/", views.refund_sale_item, name="refund_sale_item"),
+    path(
+        "sales/<int:sale_id>/refund/", views.refund_full_sale, name="refund_full_sale"
+    ),
+    path(
+        "sales/<int:sale_id>/items/<int:item_id>/refund/",
+        views.refund_sale_item,
+        name="refund_sale_item",
+    ),
     # User Management
     path("users/", views.get_all_users, name="get_all_users"),
     path("users/<int:user_id>/", views.get_user, name="get_user"),
     path("users/<int:user_id>/update/", views.update_user, name="update_user"),
     path("users/<int:user_id>/delete/", views.delete_user, name="delete_user"),
-    path("users/<int:user_id>/permissions/", views.update_staff_permissions, name="update_staff_permissions"),
+    path(
+        "users/<int:user_id>/permissions/",
+        views.update_staff_permissions,
+        name="update_staff_permissions",
+    ),
     path("audit-logs/", views.get_audit_logs, name="get_audit_logs"),
     # Compatibility Management
-    path("compatibility/groups/create/", views.create_compatibility_group, name="create_compatibility_group"),
-    path("compatibility/groups/<int:group_id>/update/", views.update_compatibility_group, name="update_compatibility_group"),
-    path("compatibility/groups/<int:group_id>/delete/", views.delete_compatibility_group, name="delete_compatibility_group"),
-    path("compatibility/attributes/create/", views.create_compatibility_attribute, name="create_compatibility_attribute"),
-    path("compatibility/attributes/<int:attribute_id>/update/", views.update_compatibility_attribute, name="update_compatibility_attribute"),
-    path("compatibility/attributes/<int:attribute_id>/delete/", views.delete_compatibility_attribute, name="delete_compatibility_attribute"),
-    path("compatibility/values/create/", views.create_compatibility_value, name="create_compatibility_value"),
-    path("compatibility/values/<int:value_id>/update/", views.update_compatibility_value, name="update_compatibility_value"),
-    path("compatibility/values/<int:value_id>/delete/", views.delete_compatibility_value, name="delete_compatibility_value"),
+    path(
+        "compatibility/groups/create/",
+        views.create_compatibility_group,
+        name="create_compatibility_group",
+    ),
+    path(
+        "compatibility/groups/<int:group_id>/update/",
+        views.update_compatibility_group,
+        name="update_compatibility_group",
+    ),
+    path(
+        "compatibility/groups/<int:group_id>/delete/",
+        views.delete_compatibility_group,
+        name="delete_compatibility_group",
+    ),
+    path(
+        "compatibility/attributes/create/",
+        views.create_compatibility_attribute,
+        name="create_compatibility_attribute",
+    ),
+    path(
+        "compatibility/attributes/<int:attribute_id>/update/",
+        views.update_compatibility_attribute,
+        name="update_compatibility_attribute",
+    ),
+    path(
+        "compatibility/attributes/<int:attribute_id>/delete/",
+        views.delete_compatibility_attribute,
+        name="delete_compatibility_attribute",
+    ),
+    path(
+        "compatibility/values/create/",
+        views.create_compatibility_value,
+        name="create_compatibility_value",
+    ),
+    path(
+        "compatibility/values/<int:value_id>/update/",
+        views.update_compatibility_value,
+        name="update_compatibility_value",
+    ),
+    path(
+        "compatibility/values/<int:value_id>/delete/",
+        views.delete_compatibility_value,
+        name="delete_compatibility_value",
+    ),
     # Product Reservations
     path("reservations/create/", views.create_reservation, name="create_reservation"),
-    path("reservations/my-reservations/", views.get_user_reservations, name="get_user_reservations"),
-    path("reservations/<int:reservation_id>/cancel/", views.cancel_reservation, name="cancel_reservation"),
-    path("reservations/product/<int:product_id>/check/", views.check_product_reservation, name="check_product_reservation"),
+    path(
+        "reservations/my-reservations/",
+        views.get_user_reservations,
+        name="get_user_reservations",
+    ),
+    path(
+        "reservations/<int:reservation_id>/cancel/",
+        views.cancel_reservation,
+        name="cancel_reservation",
+    ),
+    path(
+        "reservations/product/<int:product_id>/check/",
+        views.check_product_reservation,
+        name="check_product_reservation",
+    ),
     path("reservations/all/", views.get_all_reservations, name="get_all_reservations"),
     # Supplier Management
     path("suppliers/", views.get_all_suppliers, name="get_all_suppliers"),

@@ -389,6 +389,15 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = "pedal.point01@gmail.com"
 EMAIL_HOST_PASSWORD = "isbp mpuf gzti jtob"
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+# Email recipients for inventory alerts (comma-separated env var or default sender)
+INVENTORY_ALERT_RECIPIENTS = [
+    email.strip()
+    for email in os.getenv(
+        "INVENTORY_ALERT_RECIPIENTS",
+        DEFAULT_FROM_EMAIL,
+    ).split(",")
+    if email.strip()
+]
 # isbp mpuf gzti jtob - new
 
 

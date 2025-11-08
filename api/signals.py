@@ -1,4 +1,4 @@
-from django.db.models.signals import post_save, post_delete
+from django.db.models.signals import post_save, post_delete, pre_save
 from django.dispatch import receiver
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
@@ -8,6 +8,7 @@ from allauth.account.signals import email_confirmed
 from .models import Product
 from .serializer import ProductSerializer
 from .realtime_utils import send_inventory_update
+from .utils import send_out_of_stock_alert
 
 
 @receiver(post_save, sender=Product)
@@ -41,6 +42,26 @@ def send_inventory_update_on_save(sender, instance, created, **kwargs):
         print(f"DEBUG: WebSocket update sent for product {instance.id}")
     except Exception as e:
         print(f"ERROR: Failed to send WebSocket update for product {instance.id}: {e}")
+
+
+@receiver(pre_save, sender=Product)
+def send_out_of_stock_email(sender, instance, **kwargs):
+    """
+    Trigger an alert email when product stock transitions from a positive value to zero or below.
+    """
+    if not instance.pk:
+        return
+
+    try:
+        previous = Product.objects.get(pk=instance.pk)
+    except Product.DoesNotExist:
+        return
+
+    previous_stock = previous.stock if previous.stock is not None else 0
+    new_stock = instance.stock if instance.stock is not None else 0
+
+    if previous_stock > 0 and new_stock <= 0:
+        send_out_of_stock_alert(instance)
 
 
 @receiver(post_delete, sender=Product)

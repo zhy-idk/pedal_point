@@ -288,6 +288,67 @@ PedalPoint Team
         logger.error(f"Failed to send order completion email for order #{order.id}: {str(e)}")
 
 
+def send_out_of_stock_alert(product):
+    """
+    Notify inventory team when a product's stock reaches zero.
+    Sends a simple email containing product details.
+    """
+    try:
+        recipients = getattr(settings, "INVENTORY_ALERT_RECIPIENTS", None)
+        if not recipients:
+            logger.info(
+                "Out-of-stock alert skipped for product %s (no recipients configured)",
+                product.id,
+            )
+            return
+
+        if isinstance(recipients, str):
+            recipients = [recipients]
+
+        subject = f"[Inventory Alert] {product.name} is out of stock"
+        message_lines = [
+            "Hello PedalPoint team,",
+            "",
+            "The following product has just gone out of stock:",
+            f"- Product ID: {product.id}",
+            f"- Name: {product.name or 'N/A'}",
+            f"- Variant: {product.variant_attribute or 'N/A'}",
+            f"- SKU: {product.sku or 'N/A'}",
+            f"- Remaining Stock: {product.stock}",
+        ]
+
+        if product.brand:
+            message_lines.append(f"- Brand: {product.brand.name}")
+        if product.product_listing:
+            message_lines.append(
+                f"- Listing: {product.product_listing.name or product.product_listing.id}"
+            )
+
+        message_lines.extend(
+            [
+                "",
+                "Consider reordering or updating availability as needed.",
+                "",
+                "This is an automated notification.",
+            ]
+        )
+
+        send_mail(
+            subject=subject,
+            message="\n".join(message_lines),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=list(recipients),
+            fail_silently=False,
+        )
+        logger.info("Out-of-stock alert sent for product %s", product.id)
+    except Exception as exc:
+        logger.error(
+            "Failed to send out-of-stock alert for product %s: %s",
+            product.id,
+            exc,
+        )
+
+
 def send_reservation_fulfillment_email(reservation):
     """
     Send email notification when a reservation is fulfilled (purchased).

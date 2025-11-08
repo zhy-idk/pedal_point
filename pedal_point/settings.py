@@ -336,7 +336,7 @@ DOMAIN = os.getenv("DOMAIN")
 # Proxy/SSL Configuration for Render.com (or other reverse proxies)
 # This tells Django to trust the X-Forwarded-Proto header from the proxy
 # so it knows when the original request was HTTPS
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PORT = True
 
@@ -365,6 +365,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "https://pedalpoint.share.zrok.io",
     "https://pedalpoint-frontend.onrender.com",
+    FRONTEND_URL,
+    LOCAL_URL,
 ]
 
 CSRF_COOKIE_HTTPONLY = False  # Must be False for JavaScript access

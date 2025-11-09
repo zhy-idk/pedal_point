@@ -532,7 +532,7 @@ class OrderListingSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProductListing
-        fields = ["name", "image", "slug", "category"]
+        fields = ["id", "name", "image", "slug", "category"]
 
 
 class OrderProductSerializer(serializers.ModelSerializer):

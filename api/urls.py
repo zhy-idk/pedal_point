@@ -145,6 +145,7 @@ urlpatterns = [
         views.update_order_status,
         name="update_order_status",
     ),
+    path("reviews/", views.create_product_review, name="create_product_review"),
     # Queue
     path("queue/", views.get_all_schedule, name="get_all_schedule"),
     path("queue/count/", views.get_queue_count, name="get_queue_count"),

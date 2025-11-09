@@ -1,5 +1,5 @@
 from rest_framework.decorators import api_view, permission_classes, parser_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -114,16 +114,13 @@ def _format_inventory_for_prompt(candidates: List[Tuple[ProductListing, int]]) -
 
 
 def _build_ai_prompt(
-    issue: str, bike_type: str, riding_style: str, budget: str, inventory_context: str
+    issue: str, bike_type: str, inventory_context: str
 ) -> str:
-    budget_text = budget or "Not specified"
     return f"""
 You are PedalPoint's AI repair estimator. Provide professional but friendly guidance based strictly on the official PedalPoint inventory provided below.
 
 Customer info:
 - Bike type: {bike_type}
-- Riding style: {riding_style}
-- Budget guidance: {budget_text}
 - Reported issue: {issue}
 
 Inventory items you may recommend (use exact names & prices, do not fabricate):
@@ -139,15 +136,34 @@ Formatting: Use Markdown with headings (### Diagnosis, ### Recommended Parts, ##
 """
 
 
-@api_view(["POST"])
-@permission_classes([AllowAny])
+@api_view(["GET", "POST", "DELETE"])
+@permission_classes([IsAuthenticated])
 def repair_estimator(request):
     """AI-backed repair estimator endpoint."""
+    if request.method == "GET":
+        try:
+            estimate = RepairEstimate.objects.get(user=request.user)
+            return Response(
+                {
+                    "issue": estimate.issue,
+                    "bike_type": estimate.bike_type,
+                    "ai_summary": estimate.ai_summary,
+                    "recommendations": estimate.recommendations or [],
+                    "updated_at": estimate.updated_at,
+                }
+            )
+        except RepairEstimate.DoesNotExist:
+            return Response({"error": "No saved estimate found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == "DELETE":
+        deleted, _ = RepairEstimate.objects.filter(user=request.user).delete()
+        if deleted:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response({"error": "No saved estimate found."}, status=status.HTTP_404_NOT_FOUND)
+
     payload = request.data or {}
     issue = (payload.get("issue") or "").strip()
     bike_type = (payload.get("bike_type") or "").strip() or "Unknown"
-    riding_style = (payload.get("riding_style") or "").strip() or "Unknown"
-    budget = (payload.get("budget") or "").strip()
 
     if len(issue) < 20:
         return Response(
@@ -170,7 +186,7 @@ def repair_estimator(request):
     try:
         candidates = _select_candidate_listings(issue)
         inventory_context = _format_inventory_for_prompt(candidates)
-        prompt = _build_ai_prompt(issue, bike_type, riding_style, budget, inventory_context)
+        prompt = _build_ai_prompt(issue, bike_type, inventory_context)
 
         response = requests.post(
             f"{endpoint}/{model}:generateContent",
@@ -209,7 +225,25 @@ def repair_estimator(request):
             for listing, score in candidates
         ]
 
-        return Response({"ai_summary": text, "recommendations": recommendations})
+        estimate, _ = RepairEstimate.objects.update_or_create(
+            user=request.user,
+            defaults={
+                "issue": issue,
+                "bike_type": bike_type,
+                "ai_summary": text,
+                "recommendations": recommendations,
+            },
+        )
+
+        return Response(
+            {
+                "issue": estimate.issue,
+                "bike_type": estimate.bike_type,
+                "ai_summary": estimate.ai_summary,
+                "recommendations": estimate.recommendations or [],
+                "updated_at": estimate.updated_at,
+            }
+        )
     except requests.RequestException as exc:
         logger.error("Gemini API request failed: %s", exc, exc_info=True)
         return Response(
@@ -1570,6 +1604,95 @@ def export_sales(request):
             )
 
     return response
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_product_review(request):
+    """Allow customers to submit a product review once an order is completed or refunded."""
+    order_id = request.data.get("order_id")
+    product_listing_id = request.data.get("product_listing_id")
+    star = request.data.get("star")
+    review_text = (request.data.get("review") or "").strip()
+
+    if not order_id or not product_listing_id or star is None:
+        return Response(
+            {"error": "order_id, product_listing_id, and star are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        order_id = int(order_id)
+        product_listing_id = int(product_listing_id)
+        star = int(star)
+    except (TypeError, ValueError):
+        return Response(
+            {"error": "Invalid data. IDs and star rating must be integers."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if star < 1 or star > 5:
+        return Response(
+            {"error": "Star rating must be between 1 and 5."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if review_text and len(review_text) < 10:
+        return Response(
+            {"error": "Review text must be at least 10 characters long."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        order = (
+            Order.objects.prefetch_related("items__product__product_listing")
+            .select_related("user")
+            .get(id=order_id, user=request.user)
+        )
+    except Order.DoesNotExist:
+        return Response(
+            {"error": "Order not found."}, status=status.HTTP_404_NOT_FOUND
+        )
+
+    if (
+        order.status not in ["completed", "returned"]
+        and order.payment_status != "refunded"
+    ):
+        return Response(
+            {"error": "Reviews are only allowed for completed or refunded orders."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    matching_listing = None
+    for item in order.items.all():
+        listing = getattr(item.product, "product_listing", None)
+        if listing and listing.id == product_listing_id:
+            matching_listing = listing
+            break
+
+    if not matching_listing:
+        return Response(
+            {"error": "The specified product was not part of this order."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if ProductReview.objects.filter(
+        user=request.user, product_listing_id=product_listing_id
+    ).exists():
+        return Response(
+            {"error": "You have already reviewed this product."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    review = ProductReview.objects.create(
+        product_listing=matching_listing,
+        user=request.user,
+        star=star,
+        review=review_text or None,
+    )
+
+    serializer = ProductReviewSerializer(review)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 @api_view(["GET"])

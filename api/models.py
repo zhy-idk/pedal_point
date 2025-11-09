@@ -71,6 +71,26 @@ class UserProfile(models.Model):
         return f"{self.user.username}'s Profile {self.user.date_joined} {self.user.first_name} {self.user.last_name} {self.user.email}"
 
 
+class RepairEstimate(models.Model):
+    user = models.OneToOneField(
+        "auth.User",
+        on_delete=models.CASCADE,
+        related_name="repair_estimate",
+    )
+    issue = models.TextField()
+    bike_type = models.CharField(max_length=100)
+    ai_summary = models.TextField()
+    recommendations = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Repair estimate for {self.user.username}"
+
+
 class StaffPermissions(models.Model):
     """Staff member access permissions for different modules"""
 

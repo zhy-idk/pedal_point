@@ -5,6 +5,9 @@ from django.utils.html import format_html
 from django import forms
 from django.db import models
 from .models import *
+import nested_admin
+from pedal_point.otp_admin import otp_admin_site
+
 # Repair estimator admin
 @admin.register(RepairEstimate, site=otp_admin_site)
 class RepairEstimateAdmin(admin.ModelAdmin):
@@ -26,8 +29,6 @@ class RepairEstimateAdmin(admin.ModelAdmin):
         return obj.issue[:100] + ("…" if len(obj.issue) > 100 else "")
 
     short_issue.short_description = "Issue"
-import nested_admin
-from pedal_point.otp_admin import otp_admin_site
 
 # Import allauth models and admins
 from allauth.account.models import EmailAddress, EmailConfirmation

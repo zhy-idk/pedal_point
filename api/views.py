@@ -200,15 +200,13 @@ def repair_estimator(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    api_key = getattr(settings, "GEMINI_API_KEY", None)
-    model = getattr(settings, "GEMINI_MODEL", "gemini-2.0-flash-exp")
-    endpoint = getattr(
-        settings, "GEMINI_ENDPOINT", "https://generativelanguage.googleapis.com/v1beta/models"
-    )
+    api_key = getattr(settings, "OPENROUTER_API_KEY", None)
+    model = getattr(settings, "OPENROUTER_MODEL", "anthropic/claude-3-haiku")
+    base_url = getattr(settings, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
     if not api_key:
         return Response(
-            {"error": "AI service not configured. Missing GEMINI_API_KEY."},
+            {"error": "AI service not configured. Missing OPENROUTER_API_KEY."},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
@@ -218,20 +216,33 @@ def repair_estimator(request):
         prompt = _build_ai_prompt(issue, bike_type, inventory_context)
 
         response = requests.post(
-            f"{endpoint}/{model}:generateContent",
-            headers={"Content-Type": "application/json"},
-            params={"key": api_key},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
+            f"{base_url}/chat/completions",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": settings.FRONTEND_URL,
+                "X-Title": "PedalPoint Repair Estimator",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a professional bike shop assistant for PedalPoint."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.7,
+            },
             timeout=20,
         )
         response.raise_for_status()
         data = response.json()
 
+        choices = data.get("choices", [])
         text = (
-            data.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", "")
+            choices[0]
+            .get("message", {})
+            .get("content", "")
+            if choices
+            else ""
         )
 
         if not text:

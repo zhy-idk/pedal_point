@@ -1,3 +1,10 @@
+BASIC_FALLBACK_PARTS: Dict[str, List[str]] = {
+    "flat": ["tube", "inner tube", "patch kit"],
+    "puncture": ["tube", "patch kit"],
+    "brake": ["brake pad", "rotor"],
+    "chain": ["chain", "quick link"],
+}
+
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -43,7 +50,7 @@ KEYWORD_CATEGORY_MAP: Dict[str, List[str]] = {
     "noisy": ["brakes", "drivetrain"],
 }
 
-BASIC_ISSUE_BOOST_MAP: Dict[str, List[str]] = {
+BASIC_ISSUE_PART_KEYWORDS: Dict[str, List[str]] = {
     "flat": ["tube", "inner tube", "patch", "sealant", "tire"],
     "puncture": ["tube", "patch", "tire"],
     "leak": ["tube", "sealant"],
@@ -57,7 +64,6 @@ BIKE_TYPE_PREFERENCE_MAP: Dict[str, List[str]] = {
     "bmx": ["20", "bmx"],
     "gravel": ["700", "650b", "gravel"],
     "folding": ["20", "16", "folding"],
-    "e-bike": ["27.5", "700", "e-bike"],
     "kids": ["16", "14", "12", "kids"],
 }
 
@@ -107,50 +113,54 @@ def _score_listing(listing: ProductListing, query_tokens: List[str]) -> int:
     return score
 
 
+def _listing_search_text(listing: ProductListing) -> str:
+    parts: List[str] = [
+        listing.name or "",
+        listing.description or "",
+        listing.category.name if listing.category else "",
+    ]
+    for product in listing.products.all():
+        parts.append(product.name or "")
+        if product.variant_attribute:
+            parts.append(product.variant_attribute)
+    if hasattr(listing, "compatibility_attributes"):
+        try:
+            for attr in listing.compatibility_attributes.all():
+                parts.append(getattr(attr, "display_name", "") or "")
+                parts.append(getattr(attr, "value", "") or "")
+        except Exception:
+            pass
+    return " ".join(parts).lower()
+
+
 def _select_candidate_listings(issue: str, bike_type: str, limit: int = 12) -> List[Tuple[ProductListing, int]]:
-    """Pick the most relevant listings for a repair issue."""
+    """Pick the most relevant listings for a repair issue using textual matches."""
     query_tokens = _tokenize(issue)
-
-    category_priorities: Dict[str, int] = {}
-    for token in query_tokens:
-        if token in KEYWORD_CATEGORY_MAP:
-            for cat in KEYWORD_CATEGORY_MAP[token]:
-                category_priorities[cat.lower()] = category_priorities.get(cat.lower(), 0) + 3
-
-    def get_category_boost(listing: ProductListing) -> int:
-        if not listing.category:
-            return 0
-        cat_name = (listing.category.name or "").lower()
-        for key, boost in category_priorities.items():
-            if key in cat_name:
-                return boost
-        return 0
-
     normalized_bike_type = (bike_type or "").lower()
-    bike_keywords = BIKE_TYPE_PREFERENCE_MAP.get(normalized_bike_type, [])
 
-    def get_bike_type_boost(listing: ProductListing) -> int:
-        name = (listing.name or "").lower()
-        boost = 0
-        for idx, keyword in enumerate(bike_keywords):
-            if keyword and keyword.lower() in name:
-                boost += max(4 - idx, 1)
-        return boost
-
-    basic_match_tokens = set()
+    primary_keywords: List[str] = []
     for token in query_tokens:
-        if token in BASIC_ISSUE_BOOST_MAP:
-            basic_match_tokens.update(BASIC_ISSUE_BOOST_MAP[token])
+        primary_keywords.extend(KEYWORD_CATEGORY_MAP.get(token, []))
+    primary_keywords = list(dict.fromkeys(primary_keywords))  # keep order, remove dupes
 
-    def get_basic_issue_boost(listing: ProductListing) -> int:
-        if not basic_match_tokens:
-            return 0
-        name = (listing.name or "").lower()
-        boost = 0
-        for keyword in basic_match_tokens:
-            if keyword in name:
-                boost += 5
-        return boost
+    basic_part_keywords: List[str] = []
+    for token in query_tokens:
+        basic_part_keywords.extend(BASIC_ISSUE_PART_KEYWORDS.get(token, []))
+    basic_part_keywords = list(dict.fromkeys(basic_part_keywords))
+
+    bike_keywords = BIKE_TYPE_PREFERENCE_MAP.get(normalized_bike_type, [])
+    generic_keywords = [token for token in query_tokens if len(token) > 2]
+
+    fallback_basic = []
+    if query_tokens:
+        fallback_basic = BASIC_FALLBACK_PARTS.get(query_tokens[0], [])
+
+    keyword_priority: List[Tuple[int, List[str]]] = [
+        (0, basic_part_keywords or fallback_basic),
+        (1, bike_keywords),
+        (2, primary_keywords),
+        (3, generic_keywords),
+    ]
 
     listings_qs = (
         ProductListing.objects.filter(available=True)
@@ -158,38 +168,38 @@ def _select_candidate_listings(issue: str, bike_type: str, limit: int = 12) -> L
         .prefetch_related("products")
     )
 
-    allowed_categories = {
-        cat for cat in category_priorities.keys() if category_priorities[cat]
-    }
-
-    scored_items: List[Tuple[ProductListing, int]] = []
+    listing_texts: Dict[int, str] = {}
     for listing in listings_qs:
-        if allowed_categories:
-            cat_name = (listing.category.name if listing.category else "").lower()
-            name = (listing.name or "").lower()
-            if not any(key in cat_name for key in allowed_categories) and not any(
-                key in name for key in allowed_categories
-            ):
+        listing_texts[listing.id] = _listing_search_text(listing)
+
+    matched: List[Tuple[ProductListing, int]] = []
+    seen_ids: set[int] = set()
+
+    for weight, keywords in keyword_priority:
+        for keyword in keywords:
+            keyword = keyword.lower()
+            if not keyword:
                 continue
+            for listing in listings_qs:
+                if listing.id in seen_ids:
+                    continue
+                if keyword in listing_texts[listing.id]:
+                    matched.append((listing, weight))
+                    seen_ids.add(listing.id)
+                    if len(matched) >= limit:
+                        break
+            if len(matched) >= limit:
+                break
+        if len(matched) >= limit:
+            break
 
-        base_score = _score_listing(listing, query_tokens)
-        boost = get_category_boost(listing)
-        bike_boost = get_bike_type_boost(listing)
-        basic_boost = get_basic_issue_boost(listing)
-        score = base_score + boost + bike_boost + basic_boost
-        if score > 0 or not query_tokens:
-            scored_items.append((listing, score))
-
-    if not scored_items:
-        fallback_items: List[Tuple[ProductListing, int]] = []
+    if not matched:
+        # Fallback: return most relevant categories or first listings
         for listing in listings_qs[:limit]:
-            fallback_items.append((listing, get_bike_type_boost(listing)))
-        scored_items = fallback_items
+            matched.append((listing, 99))
 
-    scored_items.sort(
-        key=lambda item: (item[1], -_normalize_listing_price(item[0])), reverse=True
-    )
-    return scored_items[:limit]
+    matched.sort(key=lambda item: (item[1], _normalize_listing_price(item[0])))
+    return matched[:limit]
 
 
 def _format_inventory_for_prompt(
@@ -227,38 +237,38 @@ def _build_ai_prompt(
 ) -> str:
     size_hint = ", ".join(preferred_sizes) if preferred_sizes else ""
     return f"""
-You are PedalPoint's AI repair estimator. Use ONLY the inventory list below and respond with **valid JSON** (no surrounding text).
+You are a PedalPoint bike shop staff member preparing a repair estimate. Act like a real mechanic: assume the most basic, likely problem unless the customer explicitly states otherwise, and keep the tone professional and friendly.
 
-Customer:
+Customer details:
 - Bike type: {bike_type}
 - Reported issue: {issue}
 {"- Common wheel/tire sizes to prioritize: " + size_hint if size_hint else ""}
 
-Inventory (reference by inventory_id):
+Available inventory (reference by inventory_id only):
 {inventory_context}
 
-Respond with JSON using this structure:
+Return **valid JSON with no extra text** using exactly this structure:
 {{
-  "diagnosis": "Concise diagnosis (2-3 sentences)",
+  "diagnosis": "2-3 sentence explanation of the likely issue using everyday language.",
   "recommended_parts": [
     {{
-      "inventory_id": <number>,
-      "notes": "Why this part helps or installation guidance"
+      "inventory_id": <number from the list above>,
+      "notes": "Why this specific part is recommended and any quick install advice."
     }}
   ],
   "estimated_cost": {{
-    "parts_subtotal": "PHP range or value",
-    "labor": "Suggested labor cost (e.g. ₱300-600)",
-    "total": "Total estimated cost range"
+    "parts_subtotal": "Exact PHP price or range derived from the recommended parts",
+    "labor": "Labor guidance (e.g. ₱300-600)",
+    "total": "Estimated overall cost range"
   }},
-  "next_steps": "Actionable advice for the rider"
+  "next_steps": "Tell the rider to speak with a human PedalPoint staff member if they need clarification or scheduling help."
 }}
 
-Rules:
-- Use only inventory_id values from the list.
-- Recommend at most 4 parts. If nothing fits, return an empty list.
-- Keep explanations professional and friendly.
-- Always start with the simplest, most common fixes for the given bike type before suggesting complex solutions. For flat tires, suggest tubes/tires first that match the common sizes above.
+Important rules:
+- Only reference catalog items provided in the inventory list. Never invent a product or its size.
+- Recommend at most 4 parts. Prioritize the simplest, most common fixes first (e.g., tubes for flat tires).
+- If the customer explicitly wants a product that is NOT listed, set recommended_parts to [] and mention that we do not stock it yet.
+- If nothing matches, keep recommended_parts empty but still provide a helpful diagnosis and next_steps.
 """
 
 
@@ -317,7 +327,8 @@ def repair_estimator(request):
     try:
         candidates = _select_candidate_listings(issue, bike_type)
         inventory_context, inventory_entries = _format_inventory_for_prompt(candidates)
-        preferred_sizes = BIKE_TYPE_PREFERENCE_MAP.get(bike_type.lower(), [])
+        bike_type_lower = (bike_type or "").lower()
+        preferred_sizes = BIKE_TYPE_PREFERENCE_MAP.get(bike_type_lower, [])
         prompt = _build_ai_prompt(issue, bike_type, inventory_context, preferred_sizes)
 
         response = requests.post(

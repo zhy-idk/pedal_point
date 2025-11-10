@@ -1,10 +1,3 @@
-BASIC_FALLBACK_PARTS: Dict[str, List[str]] = {
-    "flat": ["tube", "inner tube", "patch kit"],
-    "puncture": ["tube", "patch kit"],
-    "brake": ["brake pad", "rotor"],
-    "chain": ["chain", "quick link"],
-}
-
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -37,6 +30,13 @@ from typing import Any, Dict, List, Tuple
 import requests
 
 logger = logging.getLogger(__name__)
+
+BASIC_FALLBACK_PARTS: Dict[str, List[str]] = {
+    "flat": ["tube", "inner tube", "patch kit"],
+    "puncture": ["tube", "patch kit"],
+    "brake": ["brake pad", "rotor"],
+    "chain": ["chain", "quick link"],
+}
 
 KEYWORD_CATEGORY_MAP: Dict[str, List[str]] = {
     "tire": ["tires", "inner tubes", "tubes", "wheelset", "wheels"],

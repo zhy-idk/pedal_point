@@ -197,7 +197,6 @@ Rules:
 - Recommend at most 4 parts. If nothing fits, return an empty list.
 - Keep explanations professional and friendly.
 """
-"""
 
 
 @api_view(["GET", "POST", "DELETE"])

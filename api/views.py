@@ -25,7 +25,7 @@ from django.conf import settings
 from django.utils import timezone
 import logging
 import csv
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 import requests
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,33 @@ def _select_candidate_listings(issue: str, limit: int = 12) -> List[Tuple[Produc
     """Pick the most relevant listings for a repair issue."""
     query_tokens = _tokenize(issue)
 
+    keyword_category_map: Dict[str, List[str]] = {
+        "tire": ["tires", "inner tubes", "tubes", "wheelset", "wheels"],
+        "tube": ["tires", "inner tubes", "tubes"],
+        "flat": ["tires", "inner tubes", "tubes"],
+        "puncture": ["tires", "inner tubes", "tubes"],
+        "brake": ["brakes", "rotors", "pads"],
+        "chain": ["drivetrain", "chain", "cassette"],
+        "gear": ["drivetrain", "derailleur"],
+        "shift": ["drivetrain", "derailleur"],
+        "noisy": ["brakes", "drivetrain"],
+    }
+
+    category_priorities: Dict[str, int] = {}
+    for token in query_tokens:
+        if token in keyword_category_map:
+            for cat in keyword_category_map[token]:
+                category_priorities[cat.lower()] = category_priorities.get(cat.lower(), 0) + 3
+
+    def get_category_boost(listing: ProductListing) -> int:
+        if not listing.category:
+            return 0
+        cat_name = (listing.category.name or "").lower()
+        for key, boost in category_priorities.items():
+            if key in cat_name:
+                return boost
+        return 0
+
     listings_qs = (
         ProductListing.objects.filter(available=True)
         .select_related("category")
@@ -89,7 +116,9 @@ def _select_candidate_listings(issue: str, limit: int = 12) -> List[Tuple[Produc
 
     scored_items: List[Tuple[ProductListing, int]] = []
     for listing in listings_qs:
-        score = _score_listing(listing, query_tokens)
+        base_score = _score_listing(listing, query_tokens)
+        boost = get_category_boost(listing)
+        score = base_score + boost
         if score > 0 or not query_tokens:
             scored_items.append((listing, score))
 

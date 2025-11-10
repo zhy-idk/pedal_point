@@ -58,12 +58,12 @@ BASIC_ISSUE_PART_KEYWORDS: Dict[str, List[str]] = {
 }
 
 BIKE_TYPE_PREFERENCE_MAP: Dict[str, List[str]] = {
-    "mountain": ["29", "27.5", "26", "mtb", "trail"],
-    "road": ["700", "700c", "25c", "road"],
-    "hybrid": ["700", "700c", "28", "hybrid"],
-    "bmx": ["20", "bmx"],
-    "gravel": ["700", "650b", "gravel"],
-    "folding": ["20", "16", "folding"],
+    "mountain": ["29", "27.5", "26", "31.6", "31.8", "35", "mtb", "trail"],
+    "road": ["700", "700c", "25c", "27.2", "31.8", "road"],
+    "hybrid": ["700", "700c", "28", "27.2", "31.8", "hybrid"],
+    "bmx": ["20", "bmx", "25t"],
+    "gravel": ["700", "650b", "27.2", "gravel"],
+    "folding": ["20", "16", "28.6", "folding"],
     "kids": ["16", "14", "12", "kids"],
 }
 
@@ -141,26 +141,45 @@ def _select_candidate_listings(issue: str, bike_type: str, limit: int = 12) -> L
     primary_keywords: List[str] = []
     for token in query_tokens:
         primary_keywords.extend(KEYWORD_CATEGORY_MAP.get(token, []))
-    primary_keywords = list(dict.fromkeys(primary_keywords))  # keep order, remove dupes
+    primary_keywords = list(dict.fromkeys(primary_keywords))
 
     basic_part_keywords: List[str] = []
     for token in query_tokens:
         basic_part_keywords.extend(BASIC_ISSUE_PART_KEYWORDS.get(token, []))
     basic_part_keywords = list(dict.fromkeys(basic_part_keywords))
 
-    bike_keywords = BIKE_TYPE_PREFERENCE_MAP.get(normalized_bike_type, [])
-    generic_keywords = [token for token in query_tokens if len(token) > 2]
+    fallback_basic: List[str] = []
+    for token in query_tokens:
+        fallback_basic.extend(BASIC_FALLBACK_PARTS.get(token, []))
+    fallback_basic = list(dict.fromkeys(fallback_basic))
 
-    fallback_basic = []
-    if query_tokens:
-        fallback_basic = BASIC_FALLBACK_PARTS.get(query_tokens[0], [])
+    size_tokens = [token for token in query_tokens if any(ch.isdigit() for ch in token)]
+    size_tokens = list(dict.fromkeys(size_tokens))
 
-    keyword_priority: List[Tuple[int, List[str]]] = [
-        (0, basic_part_keywords or fallback_basic),
-        (1, bike_keywords),
-        (2, primary_keywords),
-        (3, generic_keywords),
+    generic_keywords = [
+        token for token in query_tokens if len(token) > 2 and token not in size_tokens
     ]
+    generic_keywords = list(dict.fromkeys(generic_keywords))
+
+    bike_keywords = BIKE_TYPE_PREFERENCE_MAP.get(normalized_bike_type, [])
+
+    keyword_priority: List[Tuple[int, List[str]]] = []
+    if basic_part_keywords:
+        keyword_priority.append((0, basic_part_keywords))
+    elif fallback_basic:
+        keyword_priority.append((0, fallback_basic))
+
+    if size_tokens:
+        keyword_priority.append((1, size_tokens))
+
+    if primary_keywords:
+        keyword_priority.append((2, primary_keywords))
+
+    if generic_keywords:
+        keyword_priority.append((3, generic_keywords))
+
+    if bike_keywords:
+        keyword_priority.append((4, bike_keywords))
 
     listings_qs = (
         ProductListing.objects.filter(available=True)
@@ -242,7 +261,7 @@ You are a PedalPoint bike shop staff member preparing a repair estimate. Act lik
 Customer details:
 - Bike type: {bike_type}
 - Reported issue: {issue}
-{"- Common wheel/tire sizes to prioritize: " + size_hint if size_hint else ""}
+{"- Common component sizes to prioritize: " + size_hint if size_hint else ""}
 
 Available inventory (reference by inventory_id only):
 {inventory_context}

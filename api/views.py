@@ -25,7 +25,8 @@ from django.conf import settings
 from django.utils import timezone
 import logging
 import csv
-from typing import Dict, List, Tuple
+import json
+from typing import Any, Dict, List, Tuple
 import requests
 
 logger = logging.getLogger(__name__)
@@ -131,37 +132,71 @@ def _select_candidate_listings(issue: str, limit: int = 12) -> List[Tuple[Produc
     return scored_items[:limit]
 
 
-def _format_inventory_for_prompt(candidates: List[Tuple[ProductListing, int]]) -> str:
+def _format_inventory_for_prompt(
+    candidates: List[Tuple[ProductListing, int]]
+) -> Tuple[str, List[Dict[str, Any]]]:
     parts = []
-    for listing, score in candidates:
+    structured_entries: List[Dict[str, Any]] = []
+    for idx, (listing, score) in enumerate(candidates, start=1):
         price = _normalize_listing_price(listing)
+        entry = {
+            "inventory_id": idx,
+            "id": listing.id,
+            "name": listing.name,
+            "category": listing.category.name if listing.category else "General",
+            "category_slug": listing.category.slug if listing.category else "products",
+            "slug": listing.slug,
+            "price": price,
+            "product_url": f"{listing.category.slug if listing.category else 'products'}/{listing.slug}",
+        }
+        structured_entries.append(entry)
         parts.append(
-            f"- {listing.name} | Category: {listing.category.name if listing.category else 'General'} | "
-            f"Price: ₱{price:,.0f} | Product URL: {listing.category.slug if listing.category else 'products'}/{listing.slug}"
+            f"{idx}. {listing.name} | Category: {entry['category']} | "
+            f"Price: ₱{price:,.0f} | Product URL: {entry['product_url']}"
         )
-    return "\n".join(parts) if parts else "No closely matching inventory items were found."
+    context = (
+        "\n".join(parts)
+        if parts
+        else "No closely matching inventory items were found."
+    )
+    return context, structured_entries
 
 
 def _build_ai_prompt(
     issue: str, bike_type: str, inventory_context: str
 ) -> str:
     return f"""
-You are PedalPoint's AI repair estimator. Provide professional but friendly guidance based strictly on the official PedalPoint inventory provided below.
+You are PedalPoint's AI repair estimator. Use ONLY the inventory list below and respond with **valid JSON** (no surrounding text).
 
-Customer info:
+Customer:
 - Bike type: {bike_type}
 - Reported issue: {issue}
 
-Inventory items you may recommend (use exact names & prices, do not fabricate):
+Inventory (reference by inventory_id):
 {inventory_context}
 
-Instructions:
-1. Give a concise diagnosis (2-3 sentences max).
-2. Recommend up to 4 relevant parts. Use bullet points and include part name and price from the list above. If nothing matches, state that no exact parts are available and recommend a manual inspection.
-3. Provide an estimated total cost range using the recommended parts (include labor estimate of ₱300-600 unless the user says they will DIY).
-4. Suggest next steps (booking repair, diagnostic check, etc.).
+Respond with JSON using this structure:
+{{
+  "diagnosis": "Concise diagnosis (2-3 sentences)",
+  "recommended_parts": [
+    {{
+      "inventory_id": <number>,
+      "notes": "Why this part helps or installation guidance"
+    }}
+  ],
+  "estimated_cost": {{
+    "parts_subtotal": "PHP range or value",
+    "labor": "Suggested labor cost (e.g. ₱300-600)",
+    "total": "Total estimated cost range"
+  }},
+  "next_steps": "Actionable advice for the rider"
+}}
 
-Formatting: Use Markdown with headings (### Diagnosis, ### Recommended Parts, ### Estimated Cost, ### Next Steps). Keep the response under 180 words.
+Rules:
+- Use only inventory_id values from the list.
+- Recommend at most 4 parts. If nothing fits, return an empty list.
+- Keep explanations professional and friendly.
+"""
 """
 
 
@@ -172,12 +207,19 @@ def repair_estimator(request):
     if request.method == "GET":
         try:
             estimate = RepairEstimate.objects.get(user=request.user)
+            try:
+                stored_sections = json.loads(estimate.ai_summary)
+                if isinstance(stored_sections, str):
+                    stored_sections = {"diagnosis": stored_sections}
+            except (TypeError, json.JSONDecodeError):
+                stored_sections = {"diagnosis": estimate.ai_summary or ""}
+
             return Response(
                 {
                     "issue": estimate.issue,
                     "bike_type": estimate.bike_type,
-                    "ai_summary": estimate.ai_summary,
-                    "recommendations": estimate.recommendations or [],
+                    "ai_sections": stored_sections,
+                    "recommended_parts": estimate.recommendations or [],
                     "updated_at": estimate.updated_at,
                 }
             )
@@ -212,7 +254,7 @@ def repair_estimator(request):
 
     try:
         candidates = _select_candidate_listings(issue)
-        inventory_context = _format_inventory_for_prompt(candidates)
+        inventory_context, inventory_entries = _format_inventory_for_prompt(candidates)
         prompt = _build_ai_prompt(issue, bike_type, inventory_context)
 
         response = requests.post(
@@ -252,26 +294,79 @@ def repair_estimator(request):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        recommendations = [
-            {
-                "id": listing.id,
-                "name": listing.name,
-                "price": _normalize_listing_price(listing),
-                "category": listing.category.name if listing.category else "General",
-                "category_slug": listing.category.slug if listing.category else "products",
-                "slug": listing.slug,
-                "score": score,
+        inventory_map = {entry["inventory_id"]: entry for entry in inventory_entries}
+
+        ai_sections: Dict[str, Any] = {}
+        recommended_payload: List[Dict[str, Any]] = []
+
+        if text:
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse AI JSON response: %s", text)
+                parsed = None
+        else:
+            parsed = None
+
+        if parsed:
+            estimated_cost_raw = parsed.get("estimated_cost")
+            if isinstance(estimated_cost_raw, dict):
+                estimated_cost_section = estimated_cost_raw
+            elif isinstance(estimated_cost_raw, str):
+                estimated_cost_section = {"summary": estimated_cost_raw}
+            else:
+                estimated_cost_section = {}
+
+            ai_sections = {
+                "diagnosis": (parsed.get("diagnosis") or "").strip(),
+                "estimated_cost": estimated_cost_section,
+                "next_steps": (parsed.get("next_steps") or "").strip(),
             }
-            for listing, score in candidates
-        ]
+
+            for item in parsed.get("recommended_parts", []):
+                inv_id = item.get("inventory_id")
+                entry = inventory_map.get(inv_id)
+                if entry:
+                    recommended_payload.append(
+                        {
+                            "id": entry["id"],
+                            "name": entry["name"],
+                            "price": entry["price"],
+                            "category": entry["category"],
+                            "category_slug": entry["category_slug"],
+                            "slug": entry["slug"],
+                            "product_url": entry["product_url"],
+                            "notes": item.get("notes", "").strip(),
+                            "notes": (item.get("notes") or "").strip(),
+                        }
+                    )
+        else:
+            ai_sections = {
+                "diagnosis": text.strip() if text else "",
+                "estimated_cost": {},
+                "next_steps": "",
+            }
+            for entry in inventory_entries[:4]:
+                recommended_payload.append(
+                    {
+                        "id": entry["id"],
+                        "name": entry["name"],
+                        "price": entry["price"],
+                        "category": entry["category"],
+                        "category_slug": entry["category_slug"],
+                        "slug": entry["slug"],
+                        "product_url": entry["product_url"],
+                        "notes": "",
+                    }
+                )
 
         estimate, _ = RepairEstimate.objects.update_or_create(
             user=request.user,
             defaults={
                 "issue": issue,
                 "bike_type": bike_type,
-                "ai_summary": text,
-                "recommendations": recommendations,
+                "ai_summary": json.dumps(ai_sections, ensure_ascii=False),
+                "recommendations": recommended_payload,
             },
         )
 
@@ -279,8 +374,8 @@ def repair_estimator(request):
             {
                 "issue": estimate.issue,
                 "bike_type": estimate.bike_type,
-                "ai_summary": estimate.ai_summary,
-                "recommendations": estimate.recommendations or [],
+                "ai_sections": ai_sections,
+                "recommended_parts": recommended_payload,
                 "updated_at": estimate.updated_at,
             }
         )

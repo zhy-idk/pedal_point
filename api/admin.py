@@ -5,6 +5,27 @@ from django.utils.html import format_html
 from django import forms
 from django.db import models
 from .models import *
+# Repair estimator admin
+@admin.register(RepairEstimate, site=otp_admin_site)
+class RepairEstimateAdmin(admin.ModelAdmin):
+    list_display = ["user", "bike_type", "short_issue", "updated_at"]
+    search_fields = ["user__username", "user__email", "issue", "bike_type"]
+    readonly_fields = ["user", "issue", "bike_type", "ai_summary", "recommendations", "created_at", "updated_at"]
+    ordering = ["-updated_at"]
+
+    fieldsets = (
+        (None, {"fields": ("user", "bike_type", "issue")}),
+        ("AI Response", {"fields": ("ai_summary", "recommendations")}),
+        ("Metadata", {"fields": ("created_at", "updated_at")}),
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def short_issue(self, obj):
+        return obj.issue[:100] + ("…" if len(obj.issue) > 100 else "")
+
+    short_issue.short_description = "Issue"
 import nested_admin
 from pedal_point.otp_admin import otp_admin_site
 

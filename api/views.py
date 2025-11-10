@@ -31,6 +31,35 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+KEYWORD_CATEGORY_MAP: Dict[str, List[str]] = {
+    "tire": ["tires", "inner tubes", "tubes", "wheelset", "wheels"],
+    "tube": ["tires", "inner tubes", "tubes"],
+    "flat": ["tires", "inner tubes", "tubes"],
+    "puncture": ["tires", "inner tubes", "tubes"],
+    "brake": ["brakes", "rotors", "pads"],
+    "chain": ["drivetrain", "chain", "cassette"],
+    "gear": ["drivetrain", "derailleur"],
+    "shift": ["drivetrain", "derailleur"],
+    "noisy": ["brakes", "drivetrain"],
+}
+
+BASIC_ISSUE_BOOST_MAP: Dict[str, List[str]] = {
+    "flat": ["tube", "inner tube", "patch", "sealant", "tire"],
+    "puncture": ["tube", "patch", "tire"],
+    "leak": ["tube", "sealant"],
+    "soft": ["tube", "inner tube", "sealant"],
+}
+
+BIKE_TYPE_PREFERENCE_MAP: Dict[str, List[str]] = {
+    "mountain": ["29", "27.5", "26", "mtb", "trail"],
+    "road": ["700", "700c", "25c", "road"],
+    "hybrid": ["700", "700c", "28", "hybrid"],
+    "bmx": ["20", "bmx"],
+    "gravel": ["700", "650b", "gravel"],
+    "folding": ["20", "16", "folding"],
+    "e-bike": ["27.5", "700", "e-bike"],
+    "kids": ["16", "14", "12", "kids"],
+}
 
 def _normalize_listing_price(listing: ProductListing) -> float:
     """Return the lowest available price for a listing."""
@@ -78,26 +107,14 @@ def _score_listing(listing: ProductListing, query_tokens: List[str]) -> int:
     return score
 
 
-def _select_candidate_listings(issue: str, limit: int = 12) -> List[Tuple[ProductListing, int]]:
+def _select_candidate_listings(issue: str, bike_type: str, limit: int = 12) -> List[Tuple[ProductListing, int]]:
     """Pick the most relevant listings for a repair issue."""
     query_tokens = _tokenize(issue)
 
-    keyword_category_map: Dict[str, List[str]] = {
-        "tire": ["tires", "inner tubes", "tubes", "wheelset", "wheels"],
-        "tube": ["tires", "inner tubes", "tubes"],
-        "flat": ["tires", "inner tubes", "tubes"],
-        "puncture": ["tires", "inner tubes", "tubes"],
-        "brake": ["brakes", "rotors", "pads"],
-        "chain": ["drivetrain", "chain", "cassette"],
-        "gear": ["drivetrain", "derailleur"],
-        "shift": ["drivetrain", "derailleur"],
-        "noisy": ["brakes", "drivetrain"],
-    }
-
     category_priorities: Dict[str, int] = {}
     for token in query_tokens:
-        if token in keyword_category_map:
-            for cat in keyword_category_map[token]:
+        if token in KEYWORD_CATEGORY_MAP:
+            for cat in KEYWORD_CATEGORY_MAP[token]:
                 category_priorities[cat.lower()] = category_priorities.get(cat.lower(), 0) + 3
 
     def get_category_boost(listing: ProductListing) -> int:
@@ -109,22 +126,65 @@ def _select_candidate_listings(issue: str, limit: int = 12) -> List[Tuple[Produc
                 return boost
         return 0
 
+    normalized_bike_type = (bike_type or "").lower()
+    bike_keywords = BIKE_TYPE_PREFERENCE_MAP.get(normalized_bike_type, [])
+
+    def get_bike_type_boost(listing: ProductListing) -> int:
+        name = (listing.name or "").lower()
+        boost = 0
+        for idx, keyword in enumerate(bike_keywords):
+            if keyword and keyword.lower() in name:
+                boost += max(4 - idx, 1)
+        return boost
+
+    basic_match_tokens = set()
+    for token in query_tokens:
+        if token in BASIC_ISSUE_BOOST_MAP:
+            basic_match_tokens.update(BASIC_ISSUE_BOOST_MAP[token])
+
+    def get_basic_issue_boost(listing: ProductListing) -> int:
+        if not basic_match_tokens:
+            return 0
+        name = (listing.name or "").lower()
+        boost = 0
+        for keyword in basic_match_tokens:
+            if keyword in name:
+                boost += 5
+        return boost
+
     listings_qs = (
         ProductListing.objects.filter(available=True)
         .select_related("category")
         .prefetch_related("products")
     )
 
+    allowed_categories = {
+        cat for cat in category_priorities.keys() if category_priorities[cat]
+    }
+
     scored_items: List[Tuple[ProductListing, int]] = []
     for listing in listings_qs:
+        if allowed_categories:
+            cat_name = (listing.category.name if listing.category else "").lower()
+            name = (listing.name or "").lower()
+            if not any(key in cat_name for key in allowed_categories) and not any(
+                key in name for key in allowed_categories
+            ):
+                continue
+
         base_score = _score_listing(listing, query_tokens)
         boost = get_category_boost(listing)
-        score = base_score + boost
+        bike_boost = get_bike_type_boost(listing)
+        basic_boost = get_basic_issue_boost(listing)
+        score = base_score + boost + bike_boost + basic_boost
         if score > 0 or not query_tokens:
             scored_items.append((listing, score))
 
     if not scored_items:
-        scored_items = [(listing, 0) for listing in listings_qs[:limit]]
+        fallback_items: List[Tuple[ProductListing, int]] = []
+        for listing in listings_qs[:limit]:
+            fallback_items.append((listing, get_bike_type_boost(listing)))
+        scored_items = fallback_items
 
     scored_items.sort(
         key=lambda item: (item[1], -_normalize_listing_price(item[0])), reverse=True
@@ -163,14 +223,16 @@ def _format_inventory_for_prompt(
 
 
 def _build_ai_prompt(
-    issue: str, bike_type: str, inventory_context: str
+    issue: str, bike_type: str, inventory_context: str, preferred_sizes: List[str]
 ) -> str:
+    size_hint = ", ".join(preferred_sizes) if preferred_sizes else ""
     return f"""
 You are PedalPoint's AI repair estimator. Use ONLY the inventory list below and respond with **valid JSON** (no surrounding text).
 
 Customer:
 - Bike type: {bike_type}
 - Reported issue: {issue}
+{"- Common wheel/tire sizes to prioritize: " + size_hint if size_hint else ""}
 
 Inventory (reference by inventory_id):
 {inventory_context}
@@ -196,6 +258,7 @@ Rules:
 - Use only inventory_id values from the list.
 - Recommend at most 4 parts. If nothing fits, return an empty list.
 - Keep explanations professional and friendly.
+- Always start with the simplest, most common fixes for the given bike type before suggesting complex solutions. For flat tires, suggest tubes/tires first that match the common sizes above.
 """
 
 
@@ -252,9 +315,10 @@ def repair_estimator(request):
         )
 
     try:
-        candidates = _select_candidate_listings(issue)
+        candidates = _select_candidate_listings(issue, bike_type)
         inventory_context, inventory_entries = _format_inventory_for_prompt(candidates)
-        prompt = _build_ai_prompt(issue, bike_type, inventory_context)
+        preferred_sizes = BIKE_TYPE_PREFERENCE_MAP.get(bike_type.lower(), [])
+        prompt = _build_ai_prompt(issue, bike_type, inventory_context, preferred_sizes)
 
         response = requests.post(
             f"{base_url}/chat/completions",

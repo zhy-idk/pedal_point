@@ -444,32 +444,33 @@ class Command(BaseCommand):
                                 f"(row {product_data['row_num']}, sku={product.sku or 'N/A'})"
                             )
 
-                        needs_image = not product.product_images.exists()
-                        if needs_image:
-                            image_path = self.next_image(image_queue)
-                            if image_path:
-                                try:
-                                    self.create_variant_image(
-                                        product,
-                                        image_path,
-                                        alt_text=product.variant_attribute or product.name,
-                                        listing=None,
-                                    )
-                                except Exception as img_err:
-                                    self.stdout.write(
-                                        self.style.WARNING(
-                                            f"Image upload failed for '{product.name}' "
-                                            f"(row {product_data['row_num']}): {img_err}"
-                                        )
-                                    )
-                            elif not image_shortage_warned:
+                        # Assign image from queue based on row order (one image per product)
+                        image_path = self.next_image(image_queue)
+                        if image_path:
+                            try:
+                                # Remove any existing images to enforce one-to-one mapping
+                                product.product_images.all().delete()
+                                self.create_variant_image(
+                                    product,
+                                    image_path,
+                                    alt_text=product.variant_attribute or product.name,
+                                    listing=None,
+                                )
+                            except Exception as img_err:
                                 self.stdout.write(
                                     self.style.WARNING(
-                                        f"No image available for product '{product.name}' "
-                                        f"(row {product_data['row_num']})"
+                                        f"Image upload failed for '{product.name}' "
+                                        f"(row {product_data['row_num']}) using {image_path}: {img_err}"
                                     )
                                 )
-                                image_shortage_warned = True
+                        elif not image_shortage_warned:
+                            self.stdout.write(
+                                self.style.WARNING(
+                                    f"No image available for product '{product.name}' "
+                                    f"(row {product_data['row_num']})"
+                                )
+                            )
+                            image_shortage_warned = True
                     except Exception as row_err:
                         self.stdout.write(
                             self.style.ERROR(

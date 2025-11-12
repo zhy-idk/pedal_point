@@ -618,7 +618,21 @@ class SalesAdmin(admin.ModelAdmin):
 otp_admin_site.register(SalesItem)
 otp_admin_site.register(UserProfile)
 otp_admin_site.register(ReservedProduct)
-otp_admin_site.register(ProductSupplier)
+
+
+@admin.register(ProductSupplier, site=otp_admin_site)
+class ProductSupplierAdmin(admin.ModelAdmin):
+    list_display = ["name", "contact", "product_count"]
+    search_fields = ["name", "contact"]
+    ordering = ["name"]
+
+    def product_count(self, obj):
+        return obj.supplier.count()
+
+    product_count.short_description = "Products"
+
+
+admin.site.register(ProductSupplier, ProductSupplierAdmin)
 
 # Register remaining models
 otp_admin_site.register(ProductVariantImage)

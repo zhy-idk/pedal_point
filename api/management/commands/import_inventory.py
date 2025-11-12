@@ -126,9 +126,16 @@ class Command(BaseCommand):
             except Exception:
                 return datetime.min
 
-        # Build (timestamp, path) and sort oldest first
+        def sort_key(path):
+            filename = os.path.splitext(os.path.basename(path))[0]
+            try:
+                return int(filename), filename
+            except ValueError:
+                return filename, filename
+
+        # Build (timestamp, path) but sort primarily by filename (ensures 1.jpg..n.jpg order)
         image_with_times = [(get_image_timestamp(p), p) for p in raw_paths]
-        image_with_times.sort(key=lambda x: x[0])
+        image_with_times.sort(key=lambda x: (sort_key(x[1]), x[0]))
         image_paths = [p for _, p in image_with_times]
         self.stdout.write(
             f'Found {len(image_paths)} images in {resolved_dir} (sorted oldest first)'

@@ -478,27 +478,34 @@ class Command(BaseCommand):
                                     f"(row {variant['row_num']}, sku={product.sku or 'N/A'}, listing={listing.id})"
                                 )
 
-                            needs_image = not product.product_images.exists()
-                            image_path_used = None
-                            if needs_image:
-                                image_path = self.next_image(image_queue)
-                                if image_path:
-                                    try:
-                                        self.create_variant_image(
-                                            product,
-                                            image_path,
-                                            alt_text=product.variant_attribute or product.name,
-                                            listing=listing,
+                            variant_image_obj = None
+                            image_path = self.next_image(image_queue)
+                            if image_path:
+                                try:
+                                    product.product_images.all().delete()
+                                except Exception as delete_err:
+                                    self.stdout.write(
+                                        self.style.WARNING(
+                                            f"Could not clear existing images for '{product.name}': {delete_err}"
                                         )
-                                        image_path_used = image_path
-                                    except Exception as img_err:
-                                        self.stdout.write(
-                                            self.style.WARNING(
-                                                f"Image upload failed for '{product.name}' "
-                                                f"(row {variant['row_num']}): {img_err}"
-                                            )
+                                    )
+                                try:
+                                    variant_image_obj = self.create_variant_image(
+                                        product,
+                                        image_path,
+                                        alt_text=product.variant_attribute or product.name,
+                                        listing=listing,
+                                    )
+                                except Exception as img_err:
+                                    self.stdout.write(
+                                        self.style.WARNING(
+                                            f"Image upload failed for '{product.name}' "
+                                            f"(row {variant['row_num']}): {img_err}"
                                         )
-                                elif not image_shortage_warned:
+                                    )
+                                    variant_image_obj = None
+                            else:
+                                if not image_shortage_warned and not product.product_images.exists():
                                     self.stdout.write(
                                         self.style.WARNING(
                                             f"No image available for product '{product.name}' "
@@ -506,35 +513,12 @@ class Command(BaseCommand):
                                         )
                                     )
                                     image_shortage_warned = True
+                                variant_image_obj = product.product_images.first()
 
-                            if not listing_thumbnail_set:
-                                if image_path_used:
-                                    try:
-                                        thumbnail_filename = self.build_image_filename(
-                                            listing.name or f'listing-{listing.pk}',
-                                            'thumbnail',
-                                            image_path_used,
-                                        )
-                                        with open(image_path_used, 'rb') as thumb_file:
-                                            listing.image.save(
-                                                thumbnail_filename,
-                                                File(thumb_file),
-                                                save=False,
-                                            )
-                                        listing.save(update_fields=['image'])
-                                        listing_thumbnail_set = True
-                                    except Exception as thumb_err:
-                                        self.stdout.write(
-                                            self.style.WARNING(
-                                                f"Failed to set thumbnail for listing '{listing.name}': {thumb_err}"
-                                            )
-                                        )
-                                else:
-                                    existing_variant_image = product.product_images.first()
-                                    if existing_variant_image:
-                                        listing.image = existing_variant_image.image
-                                        listing.save(update_fields=['image'])
-                                        listing_thumbnail_set = True
+                            if not listing_thumbnail_set and variant_image_obj:
+                                listing.image = variant_image_obj.image
+                                listing.save(update_fields=['image'])
+                                listing_thumbnail_set = True
 
                         listing_products = listing.products.all()
                         if listing_products.exists():

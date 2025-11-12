@@ -419,6 +419,11 @@ def repair_estimator(request):
         except json.JSONDecodeError:
             logger.warning("Initial AI JSON parsing failed: %s", initial_text)
             initial_json = {}
+        logger.info(
+            "RepairEstimator initial AI analysis for user %s: %s",
+            request.user.id if request.user.is_authenticated else "anonymous",
+            json.dumps(initial_json, ensure_ascii=False),
+        )
 
         requested_parts = initial_json.get("parts_requested", [])
 
@@ -438,6 +443,20 @@ def repair_estimator(request):
             )
         else:
             matched_candidates = _select_candidate_listings(issue, bike_type)
+
+        logger.info(
+            "RepairEstimator matched catalog items (limit %s) for user %s: %s",
+            limit,
+            request.user.id if request.user.is_authenticated else "anonymous",
+            [
+                {
+                    "id": listing.id,
+                    "name": listing.name,
+                    "category": listing.category.name if listing.category else "",
+                }
+                for listing, _ in matched_candidates
+            ],
+        )
 
         inventory_context, inventory_entries = _format_inventory_for_prompt(matched_candidates)
         bike_type_lower = (bike_type or "").lower()
@@ -477,6 +496,12 @@ def repair_estimator(request):
             final_data.get("choices", [{}])[0]
             .get("message", {})
             .get("content", "")
+        )
+
+        logger.info(
+            "RepairEstimator final AI payload for user %s: %s",
+            request.user.id if request.user.is_authenticated else "anonymous",
+            text,
         )
 
         if not text:

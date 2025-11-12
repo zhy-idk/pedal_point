@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+import logging
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 import dj_database_url
@@ -179,28 +180,63 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STORAGES = {
-    "default": {
-        "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
-        "OPTIONS": {
-            "project_id": os.getenv("GS_PROJECT_ID"),
-            "credentials": service_account.Credentials.from_service_account_file(
-                os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-            ),
-            "bucket_name": os.getenv("GS_BUCKET_NAME"),
-            "location": "media",
-            "file_overwrite": False,
+USE_GCS_STORAGE = os.getenv("USE_GCS_STORAGE", "true").lower() in ["1", "true", "yes"]
+GS_BUCKET_NAME = os.getenv("GS_BUCKET_NAME")
+GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+
+if (
+    USE_GCS_STORAGE
+    and GS_BUCKET_NAME
+    and GOOGLE_CREDENTIALS_PATH
+    and os.path.exists(GOOGLE_CREDENTIALS_PATH)
+):
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
+            "OPTIONS": {
+                "project_id": os.getenv("GS_PROJECT_ID"),
+                "credentials": service_account.Credentials.from_service_account_file(
+                    GOOGLE_CREDENTIALS_PATH
+                ),
+                "bucket_name": GS_BUCKET_NAME,
+                "location": "media",
+                "file_overwrite": False,
+            },
         },
-    },
-    "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
-    },
-}
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+    MEDIA_URL = f"https://storage.googleapis.com/{GS_BUCKET_NAME}/"
+else:
+    if USE_GCS_STORAGE and not GS_BUCKET_NAME:
+        logging.warning(
+            "USE_GCS_STORAGE is enabled but GS_BUCKET_NAME is not set. Falling back to local media storage."
+        )
+    if USE_GCS_STORAGE and GS_BUCKET_NAME and not GOOGLE_CREDENTIALS_PATH:
+        logging.warning(
+            "USE_GCS_STORAGE is enabled but GOOGLE_APPLICATION_CREDENTIALS is not set. Falling back to local media storage."
+        )
+    if USE_GCS_STORAGE and GOOGLE_CREDENTIALS_PATH and not os.path.exists(GOOGLE_CREDENTIALS_PATH):
+        logging.warning(
+            "USE_GCS_STORAGE is enabled but GOOGLE_APPLICATION_CREDENTIALS path is invalid. Falling back to local media storage."
+        )
 
+    MEDIA_ROOT = BASE_DIR / "media"
+    MEDIA_URL = "/media/"
 
-# Media files configuration
-GS_BUCKET_NAME = STORAGES["default"]["OPTIONS"]["bucket_name"]
-MEDIA_URL = f"https://storage.googleapis.com/{GS_BUCKET_NAME}/"
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+            "OPTIONS": {
+                "location": MEDIA_ROOT,
+            },
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+    GS_BUCKET_NAME = None
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"

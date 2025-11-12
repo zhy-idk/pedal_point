@@ -4,35 +4,45 @@ Groups products by brand and name, creates listings automatically.
 """
 
 from django.core.management.base import BaseCommand
+from django.core.files import File
 from django.db import transaction
+from django.utils.text import slugify
 from api.models import (
     Brands,
     Product,
     ProductListing,
     ProductSupplier,
     ProductCategory,
+    ProductVariantImage,
 )
 from decimal import Decimal
 import os
 import re
 import random
-from collections import defaultdict
+from uuid import uuid4
+from collections import defaultdict, deque
 
 
 class Command(BaseCommand):
-    help = 'Import inventory from Excel file (INVENTORY.xlsx)'
+    help = 'Import inventory from Excel file (defaults to INVENTORY FINAL.xlsx)'
 
     def add_arguments(self, parser):
         parser.add_argument(
             '--file',
             type=str,
-            default='INVENTORY.xlsx',
-            help='Path to Excel file (default: INVENTORY.xlsx)',
+            default='INVENTORY FINAL.xlsx',
+            help='Path to Excel file (default: INVENTORY FINAL.xlsx)',
         )
         parser.add_argument(
             '--dry-run',
             action='store_true',
             help='Run without making database changes',
+        )
+        parser.add_argument(
+            '--images-dir',
+            type=str,
+            default='product pics',
+            help='Directory containing product images (default: product pics)',
         )
 
     def normalize_brand_name(self, brand_name):
@@ -59,6 +69,86 @@ class Command(BaseCommand):
             return None
         return ' '.join(str(name).strip().split())
 
+    def gather_image_paths(self, directory):
+        """Collect image file paths sorted by creation time (oldest first)"""
+        if not directory:
+            return []
+
+        resolved_dir = os.path.abspath(directory)
+        if not os.path.isdir(resolved_dir):
+            self.stdout.write(
+                self.style.WARNING(f'Image directory not found: {resolved_dir}')
+            )
+            return []
+
+        allowed_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
+        image_paths = []
+
+        for root, _, files in os.walk(resolved_dir):
+            for filename in files:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext in allowed_extensions:
+                    image_paths.append(os.path.join(root, filename))
+
+        if not image_paths:
+            self.stdout.write(
+                self.style.WARNING(f'No images found under {resolved_dir}')
+            )
+            return []
+
+        # Sort by creation time (oldest first)
+        image_paths.sort(key=lambda path: os.path.getctime(path))
+        self.stdout.write(
+            f'Found {len(image_paths)} images in {resolved_dir} (sorted oldest first)'
+        )
+        return image_paths
+
+    def generate_supplier_phone(self):
+        """Generate a pseudo-random 11-digit phone number starting with 09."""
+        random_digits = ''.join([str(random.randint(0, 9)) for _ in range(9)])
+        return f'09{random_digits}'
+
+    def next_image(self, image_queue):
+        """Pop the next image path from the queue."""
+        if not image_queue:
+            return None
+        return image_queue.popleft()
+
+    def build_image_filename(self, listing_name, suffix, original_path):
+        base = slugify(listing_name) or 'listing'
+        ext = os.path.splitext(original_path)[1].lower() or '.jpg'
+        return f"{base}-{suffix}-{uuid4().hex[:8]}{ext}"
+
+    def assign_listing_thumbnail(self, listing, image_path):
+        if not image_path:
+            return False
+
+        filename = self.build_image_filename(listing.name or f'listing-{listing.pk}', 'thumbnail', image_path)
+
+        with open(image_path, 'rb') as img_file:
+            listing.image.save(filename, File(img_file), save=False)
+
+        listing.save(update_fields=['image'])
+        return True
+
+    def create_variant_image(self, product, listing, image_path, alt_text=None):
+        if not image_path:
+            return None
+
+        filename = self.build_image_filename(
+            listing.name or f'listing-{listing.pk}',
+            product.variant_attribute or 'variant',
+            image_path,
+        )
+
+        with open(image_path, 'rb') as img_file:
+            return ProductVariantImage.objects.create(
+                product=product,
+                listing=listing,
+                image=File(img_file),
+                alt_text=alt_text or product.variant_attribute or product.name or listing.name,
+            )
+
     def find_column_index(self, headers, possible_names):
         """Find column index by matching possible column names (case-insensitive)"""
         headers_lower = [str(h).lower().strip() for h in headers]
@@ -72,6 +162,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         file_path = options['file']
         dry_run = options['dry_run']
+        images_dir = options.get('images_dir')
 
         # Check if file exists
         if not os.path.exists(file_path):
@@ -229,6 +320,14 @@ class Command(BaseCommand):
             )
             self.stdout.write(f'Will create {total_products} products\n')
 
+            image_queue = deque(self.gather_image_paths(images_dir) if images_dir else [])
+            image_shortage_warned = False
+            total_images_available = len(image_queue)
+            if image_queue:
+                self.stdout.write(f'Images available: {total_images_available}')
+            else:
+                self.stdout.write('Images available: 0')
+
             if dry_run:
                 self.stdout.write(self.style.WARNING('DRY RUN MODE - No changes will be made\n'))
                 # Show preview
@@ -248,36 +347,36 @@ class Command(BaseCommand):
                 listings_existing = 0
                 products_created = 0
 
-                # First, create suppliers based on brands (one supplier per brand)
-                # Create a mapping of brand_name -> supplier
-                brand_to_supplier = {}
-                brand_list = sorted(grouped_data.keys())  # Sort for consistent numbering
-                
-                for idx, brand_name in enumerate(brand_list, start=1):
-                    supplier_name = f"Supplier #{idx}"
-                    # Generate random 11-digit phone number starting with 09
-                    # Format: 09XXXXXXXXX (09 + 9 random digits = 11 total)
-                    random_digits = ''.join([str(random.randint(0, 9)) for _ in range(9)])
-                    phone_number = f"09{random_digits}"
-                    
+                # Prepare suppliers (exactly 7, distributed across brands)
+                supplier_labels = [f"Supplier {chr(ord('A') + idx)}" for idx in range(7)]
+                supplier_objects = []
+                self.stdout.write('Setting up suppliers:')
+                for supplier_name in supplier_labels:
+                    phone_number = self.generate_supplier_phone()
                     supplier, created = ProductSupplier.objects.get_or_create(
                         name=supplier_name,
                         defaults={
                             'name': supplier_name,
-                            'contact': phone_number
-                        }
+                            'contact': phone_number,
+                        },
                     )
-                    # Update contact if supplier already exists but doesn't have a phone number
-                    if not created and not supplier.contact:
-                        supplier.contact = phone_number
-                        supplier.save()
-                    
-                    brand_to_supplier[brand_name] = supplier
                     if created:
                         suppliers_created += 1
                     else:
                         suppliers_existing += 1
-                    self.stdout.write(f'  Brand "{brand_name}" -> {supplier_name} (Contact: {phone_number})')
+                        if not supplier.contact:
+                            supplier.contact = phone_number
+                            supplier.save(update_fields=['contact'])
+                    supplier_objects.append(supplier)
+                    self.stdout.write(f'  {supplier_name} (Contact: {supplier.contact})')
+
+                brand_to_supplier = {}
+                brand_list = sorted(grouped_data.keys())  # Sort for consistent distribution
+                self.stdout.write('\nBrand to supplier assignments:')
+                for idx, brand_name in enumerate(brand_list):
+                    supplier = supplier_objects[idx % len(supplier_objects)]
+                    brand_to_supplier[brand_name] = supplier
+                    self.stdout.write(f'  Brand "{brand_name}" -> {supplier.name}')
 
                 # Process each brand
                 for brand_name, products in grouped_data.items():
@@ -320,6 +419,7 @@ class Command(BaseCommand):
                                 listing.save()
 
                         # Create products (variants)
+                        thumbnail_set = bool(listing.image)
                         for variant in variants:
                             # Calculate supplier price (30% below retail = 70% of price)
                             supplier_price = variant['price'] * Decimal('0.7')
@@ -352,6 +452,46 @@ class Command(BaseCommand):
                                 product.available = variant['qty'] > 0
                                 product.supply = supplier
                                 product.save()
+
+                            needs_variant_image = created or not product.product_images.exists()
+                            needs_thumbnail = not thumbnail_set
+                            image_path = None
+
+                            if (needs_variant_image or needs_thumbnail):
+                                image_path = self.next_image(image_queue)
+                                if image_path is None and not image_shortage_warned:
+                                    self.stdout.write(
+                                        self.style.WARNING(
+                                            'Ran out of images before assigning them to every variant.'
+                                        )
+                                    )
+                                    image_shortage_warned = True
+
+                            if image_path:
+                                if needs_variant_image:
+                                    self.create_variant_image(
+                                        product,
+                                        listing,
+                                        image_path,
+                                        alt_text=product.variant_attribute or product.name,
+                                    )
+                                if needs_thumbnail:
+                                    if self.assign_listing_thumbnail(listing, image_path):
+                                        thumbnail_set = True
+                            elif needs_thumbnail and not thumbnail_set:
+                                # Fall back to first existing variant image if available
+                                existing_variant_image = product.product_images.order_by('id').first()
+                                if existing_variant_image:
+                                    listing.image = existing_variant_image.image
+                                    listing.save(update_fields=['image'])
+                                    thumbnail_set = True
+                                elif not image_shortage_warned:
+                                    self.stdout.write(
+                                        self.style.WARNING(
+                                            f'No image available for listing "{listing.name}" (brand: {brand.name})'
+                                        )
+                                    )
+                                    image_shortage_warned = True
 
                 # Update listing prices from products
                 for listing in ProductListing.objects.all():

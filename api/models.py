@@ -739,6 +739,15 @@ class CartItem(models.Model):
 
 class Order(models.Model):
     user = models.ForeignKey("auth.User", on_delete=models.CASCADE, verbose_name="User")
+    sale = models.OneToOneField(
+        "Sales",
+        on_delete=models.SET_NULL,
+        related_name="order",
+        null=True,
+        blank=True,
+        verbose_name="Sale",
+        help_text="Linked sale record for this order",
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Order Date")
     status = models.CharField(
         max_length=50,
@@ -764,50 +773,11 @@ class Order(models.Model):
     tracking_code = models.CharField(
         verbose_name="Tracking Number", blank=True, null=True
     )
-
-    # Payment Information
-    payment_method = models.CharField(
-        max_length=50,
-        choices=[
-            ("cash_on_delivery", "Cash on Delivery"),
-            ("card", "Credit/Debit Card"),
-            ("bank_transfer", "Bank Transfer"),
-            ("gcash", "GCash"),
-            ("paymaya", "PayMaya"),
-            ("dob", "Digital Online Banking"),
-            ("grab_pay", "GrabPay"),
-            ("shopeepay", "ShopeePay"),
-            ("qr_ph", "QR Ph"),
-            ("cash", "Cash (POS)"),
-        ],
-        default="cash_on_delivery",
-        verbose_name="Payment Method",
+    is_cod = models.BooleanField(
+        default=False,
+        verbose_name="Cash on Delivery",
+        help_text="Indicates whether this order is Cash on Delivery",
     )
-    payment_status = models.CharField(
-        max_length=50,
-        choices=[
-            ("pending", "Pending"),
-            ("paid", "Paid"),
-            ("failed", "Failed"),
-            ("refunded", "Refunded"),
-        ],
-        default="pending",
-        verbose_name="Payment Status",
-    )
-    paymongo_checkout_session_id = models.CharField(
-        max_length=255,
-        blank=True,
-        null=True,
-        verbose_name="PayMongo Checkout Session ID",
-    )
-    paymongo_payment_id = models.CharField(
-        max_length=255,
-        blank=True,
-        null=True,
-        verbose_name="PayMongo Payment ID",
-        help_text="Payment ID from PayMongo checkout session",
-    )
-    paid_at = models.DateTimeField(blank=True, null=True, verbose_name="Paid At")
 
     # Cancel/Return reasons
     cancel_reason = models.TextField(
@@ -848,22 +818,76 @@ class OrderItem(models.Model):
 
 
 class Sales(models.Model):
+    SALE_TYPE_CHOICES = [
+        ("pos", "POS"),
+        ("online", "Online"),
+        ("online_cod", "Online COD"),
+        ("preorder", "Pre-order"),
+    ]
+
+    PAYMENT_STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("cod_pending", "COD Pending"),
+        ("paid", "Paid"),
+        ("failed", "Failed"),
+        ("refunded", "Refunded"),
+    ]
+
+    PAYMENT_METHOD_CHOICES = [
+        ("cash", "Cash"),
+        ("card", "Card"),
+        ("gcash", "GCash"),
+        ("paymaya", "PayMaya"),
+        ("bank_transfer", "Bank Transfer"),
+        ("cod", "Cash on Delivery"),
+        ("paymongo", "PayMongo"),
+    ]
+
     user = models.ForeignKey(
         "auth.User", on_delete=models.CASCADE, verbose_name="User", null=True
     )
     sale_date = models.DateTimeField(auto_now_add=True, verbose_name="Sale Date")
     last_modified = models.DateTimeField(auto_now=True, verbose_name="Last Modified")
+    total_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        verbose_name="Total Amount",
+    )
+    sale_type = models.CharField(
+        max_length=20,
+        choices=SALE_TYPE_CHOICES,
+        default="online",
+        verbose_name="Sale Type",
+    )
+    payment_status = models.CharField(
+        max_length=20,
+        choices=PAYMENT_STATUS_CHOICES,
+        default="pending",
+        verbose_name="Payment Status",
+    )
     payment_method = models.CharField(
         max_length=50,
-        choices=[
-            ("cash", "Cash"),
-            ("card", "Credit/Debit Card"),
-            ("gcash", "GCash"),
-            ("paymaya", "PayMaya"),
-            ("bank_transfer", "Bank Transfer"),
-        ],
-        default="cash",
+        choices=PAYMENT_METHOD_CHOICES,
+        default="paymongo",
         verbose_name="Payment Method",
+    )
+    payment_date = models.DateTimeField(
+        blank=True, null=True, verbose_name="Payment Date"
+    )
+    notes = models.TextField(blank=True, verbose_name="Notes")
+    paymongo_checkout_session_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="PayMongo Checkout Session ID",
+    )
+    paymongo_payment_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="PayMongo Payment ID",
+        help_text="Payment ID from PayMongo checkout session",
     )
     salesperson = models.ForeignKey(
         "auth.User",
@@ -873,14 +897,6 @@ class Sales(models.Model):
         null=True,
         blank=True,
         help_text="Staff member who processed this sale (POS only, None for online sales)",
-    )
-    order = models.OneToOneField(
-        Order,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        verbose_name="Related Order",
-        help_text="Linked order (1 Order = 1 Sale)",
     )
 
     class Meta:

@@ -259,6 +259,11 @@ def send_order_completion_email(order):
             for item in order.items.select_related('product').all()
         ])
         
+        sale = getattr(order, "sale", None)
+        payment_method_display = (
+            sale.get_payment_method_display() if sale else "N/A"
+        )
+
         message = f"""Hello {order.user.get_full_name() or order.user.username},
 
 Your order #{order.id} has been completed!
@@ -268,7 +273,7 @@ Order Details:
 
 Order Date: {order.created_at.strftime('%B %d, %Y at %I:%M %p')}
 Status: {order.get_status_display()}
-Payment Method: {order.get_payment_method_display()}
+Payment Method: {payment_method_display}
 
 Thank you for shopping with PedalPoint!
 

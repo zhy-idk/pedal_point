@@ -206,15 +206,30 @@ def update_order_payment_status(order, payment_intent_data):
         payment_intent_data.get("data", {}).get("attributes", {}).get("status")
     )
 
+    sale = getattr(order, "sale", None)
+    if sale is None:
+        return order
+
+    sale_updates = []
+    order_updates = []
+
     if payment_status == "succeeded":
-        order.payment_status = "paid"
-        order.paid_at = timezone.now()
+        sale.payment_status = "paid"
+        sale.payment_date = timezone.now()
+        sale_updates.extend(["payment_status", "payment_date"])
         if order.status == "to_pay":
             order.status = "to_ship"
+            order_updates.append("status")
     elif payment_status == "processing":
-        order.payment_status = "pending"
+        sale.payment_status = "pending"
+        sale_updates.append("payment_status")
     elif payment_status in ["failed", "cancelled"]:
-        order.payment_status = "failed"
+        sale.payment_status = "failed"
+        sale.payment_date = None
+        sale_updates.extend(["payment_status", "payment_date"])
 
-    order.save()
+    if sale_updates:
+        sale.save(update_fields=list(set(sale_updates)))
+    if order_updates:
+        order.save(update_fields=list(set(order_updates)))
     return order

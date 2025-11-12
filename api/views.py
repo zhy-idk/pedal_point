@@ -13,6 +13,7 @@ from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils.decorators import method_decorator
+from django.db import transaction
 from django.db.models import Count, Max, Q
 from django.core.paginator import Paginator
 from datetime import datetime
@@ -34,6 +35,7 @@ import csv
 import json
 from typing import Any, Dict, List, Tuple
 import requests
+from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,102 @@ class CSVAttachmentRenderer(BaseRenderer):
 
     def render(self, data, accepted_media_type=None, renderer_context=None):
         return data
+
+
+SALE_PAYMENT_METHOD_MAP = {
+    "cash_on_delivery": "cod",
+    "cod": "cod",
+    "cash": "cash",
+    "card": "card",
+    "gcash": "gcash",
+    "paymaya": "paymaya",
+    "bank_transfer": "bank_transfer",
+    "dob": "paymongo",
+    "grab_pay": "paymongo",
+    "shopeepay": "paymongo",
+    "qr_ph": "paymongo",
+    "paymongo": "paymongo",
+}
+
+
+def _map_payment_method(requested_method: str) -> str:
+    normalized = (requested_method or "").lower()
+    return SALE_PAYMENT_METHOD_MAP.get(normalized, "paymongo")
+
+
+def _default_sale_type(mapped_method: str) -> str:
+    if mapped_method == "cod":
+        return "online_cod"
+    if mapped_method == "cash":
+        return "pos"
+    return "online"
+
+
+def _initial_payment_status(mapped_method: str) -> str:
+    if mapped_method == "cod":
+        return "cod_pending"
+    if mapped_method == "cash":
+        return "paid"
+    return "pending"
+
+
+def _decimal_amount(value) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value or 0))
+    except Exception:
+        return Decimal("0")
+
+
+def _ensure_sale_for_order(order: Order) -> Sales:
+    """
+    Ensure an order has an associated Sales record populated with its items.
+    """
+    if getattr(order, "sale", None):
+        return order.sale
+
+    mapped_method = "cod" if getattr(order, "is_cod", False) else "paymongo"
+    sale_type = _default_sale_type(mapped_method)
+    payment_status = _initial_payment_status(mapped_method)
+    notes = (order.notes or "").strip()
+
+    sale = Sales.objects.create(
+        user=order.user,
+        total_amount=Decimal("0"),
+        sale_type=sale_type,
+        payment_status=payment_status,
+        payment_method=mapped_method,
+        notes=notes,
+    )
+
+    total_amount = Decimal("0")
+    for item in order.items.select_related("product"):
+        product = item.product
+        product_price = _decimal_amount(product.price if product else 0)
+        item_amount = product_price * item.quantity
+        supplier_price = (
+            _decimal_amount(product.supplier_price)
+            if product and product.supplier_price is not None
+            else None
+        )
+
+        SalesItem.objects.create(
+            sales=sale,
+            product=product,
+            quantity_sold=item.quantity,
+            amount=item_amount,
+            supplier_price=supplier_price,
+        )
+
+        total_amount += item_amount
+
+    sale.total_amount = total_amount
+    sale.save(update_fields=["total_amount"])
+
+    order.sale = sale
+    order.save(update_fields=["sale"])
+    return sale
 
 BASIC_FALLBACK_PARTS: Dict[str, List[str]] = {
     "flat": ["tube", "inner tube", "patch kit"],
@@ -276,6 +374,17 @@ def _build_ai_prompt(
 ) -> str:
     size_hint = ", ".join(preferred_sizes) if preferred_sizes else ""
     requested_json = json.dumps(requested_parts, ensure_ascii=False, indent=2)
+    labor_reference = """
+Recommended labor fee guide (choose the closest match):
+- Bike Tuning ₱20 - ₱50
+- Bolt Tightening & Minor Adjustments ₱20 - ₱50
+- Brake Bleeding ₱50 - ₱80
+- Wheel Alignment ₱50 - ₱100
+- Parts Installation ₱50 - ₱150
+- Rimset Alignment ₱150 - ₱200
+- Fork Adjustment / Suspension Setup ₱250 - ₱350
+- Full Bike Assembly ₱150 - ₱50
+""".strip()
     return f"""
 You are a PedalPoint bike shop staff member preparing a repair estimate. Act like a real mechanic: assume the most basic, likely problem unless the customer explicitly states otherwise, and keep the tone professional and friendly.
 
@@ -286,6 +395,9 @@ Customer details:
 
 Available inventory (reference by inventory_id only):
 {inventory_context}
+
+Labor fee reference:
+{labor_reference}
 
 Earlier analysis suggested:
 - Likely diagnosis: {initial_diagnosis or "Not provided"}
@@ -302,7 +414,7 @@ Return **valid JSON with no extra text** using exactly this structure:
   ],
   "estimated_cost": {{
     "parts_subtotal": "Exact PHP price or range derived from the recommended parts",
-    "labor": "Labor guidance (e.g. ₱300-600)",
+    "labor": "Pick the most appropriate labor fee range from the reference list above",
     "total": "Estimated overall cost range"
   }},
   "next_steps": "Tell the rider to speak with a human PedalPoint staff member if they need clarification or scheduling help."
@@ -701,12 +813,8 @@ def map_paymongo_source_to_payment_method(source_type):
         "card": "card",
         "gcash": "gcash",
         "paymaya": "paymaya",
-        "grab_pay": "grab_pay",
-        "dob": "dob",  # Direct Online Banking
-        "qrph": "qr_ph",
-        "billease": "billease",
     }
-    return mapping.get(source_type, source_type)
+    return mapping.get(source_type, "paymongo")
 
 
 # CSRF & Auth
@@ -1423,20 +1531,57 @@ def buy_now_checkout(request):
         notes = request.data.get("notes", "")
         payment_method = request.data.get("payment_method", "cash_on_delivery")
 
-        # Create order
-        order = Order.objects.create(
-            user=user,
-            shipping_address=shipping_address,
-            contact_number=contact_number,
-            notes=notes,
-            payment_method=payment_method,
-        )
+        mapped_payment_method = _map_payment_method(payment_method)
+        sale_type = _default_sale_type(mapped_payment_method)
+        payment_status = _initial_payment_status(mapped_payment_method)
+        normalized_notes = (notes or "").strip()
 
-        # Create order item
-        OrderItem.objects.create(order=order, product=product, quantity=quantity)
+        with transaction.atomic():
+            sale = Sales.objects.create(
+                user=user if user.is_authenticated else None,
+                total_amount=Decimal("0"),
+                sale_type=sale_type,
+                payment_status=payment_status,
+                payment_method=mapped_payment_method,
+                notes=normalized_notes,
+            )
 
-        # For COD, deduct inventory immediately
-        if payment_method == "cash_on_delivery":
+            order = Order.objects.create(
+                user=user,
+                sale=sale,
+                shipping_address=shipping_address,
+                contact_number=contact_number,
+                notes=notes,
+                is_cod=mapped_payment_method == "cod",
+            )
+
+            order_item = OrderItem.objects.create(
+                order=order, product=product, quantity=quantity
+            )
+
+            item_price = _decimal_amount(product.price)
+            item_amount = item_price * quantity
+            supplier_price = (
+                _decimal_amount(product.supplier_price)
+                if product and product.supplier_price is not None
+                else None
+            )
+
+            SalesItem.objects.create(
+                sales=sale,
+                product=product,
+                quantity_sold=quantity,
+                amount=item_amount,
+                supplier_price=supplier_price,
+            )
+
+            sale.total_amount = item_amount
+            if payment_status == "paid":
+                sale.payment_date = timezone.now()
+            sale.save(update_fields=["total_amount", "payment_date"])
+
+        # For COD, deduct inventory immediately after transaction commits
+        if mapped_payment_method == "cod":
             deduct_inventory_for_order(order)
 
         # Send realtime updates
@@ -1486,24 +1631,62 @@ def checkout(request):
         notes = request.data.get("notes", "")
         payment_method = request.data.get("payment_method", "cash_on_delivery")
 
-        # Create order with shipping information
-        order = Order.objects.create(
-            user=user,
-            shipping_address=shipping_address,
-            contact_number=contact_number,
-            notes=notes,
-            payment_method=payment_method,
-        )
+        mapped_payment_method = _map_payment_method(payment_method)
+        sale_type = _default_sale_type(mapped_payment_method)
+        payment_status = _initial_payment_status(mapped_payment_method)
+        normalized_notes = (notes or "").strip()
 
-        # Create order items but don't deduct inventory yet
-        for item in cart.items.all():
-            OrderItem.objects.create(
-                order=order, product=item.product, quantity=item.quantity
+        with transaction.atomic():
+            sale = Sales.objects.create(
+                user=user if user.is_authenticated else None,
+                total_amount=Decimal("0"),
+                sale_type=sale_type,
+                payment_status=payment_status,
+                payment_method=mapped_payment_method,
+                notes=normalized_notes,
             )
+
+            order = Order.objects.create(
+                user=user,
+                sale=sale,
+                shipping_address=shipping_address,
+                contact_number=contact_number,
+                notes=notes,
+                is_cod=mapped_payment_method == "cod",
+            )
+
+            total_amount = Decimal("0")
+            for item in cart.items.select_related("product"):
+                order_item = OrderItem.objects.create(
+                    order=order, product=item.product, quantity=item.quantity
+                )
+
+                product_price = _decimal_amount(item.product.price)
+                item_amount = product_price * item.quantity
+                supplier_price = (
+                    _decimal_amount(item.product.supplier_price)
+                    if item.product and item.product.supplier_price is not None
+                    else None
+                )
+
+                SalesItem.objects.create(
+                    sales=sale,
+                    product=item.product,
+                    quantity_sold=item.quantity,
+                    amount=item_amount,
+                    supplier_price=supplier_price,
+                )
+
+                total_amount += item_amount
+
+            sale.total_amount = total_amount
+            if payment_status == "paid":
+                sale.payment_date = timezone.now()
+            sale.save(update_fields=["total_amount", "payment_date"])
 
         # Only clear cart for cash on delivery (immediate payment)
         # For other payment methods, keep cart until payment is confirmed
-        if payment_method == "cash_on_delivery":
+        if mapped_payment_method == "cod":
             cart.delete()
             # Deduct inventory for COD orders
             deduct_inventory_for_order(order)
@@ -1555,55 +1738,79 @@ def pos_sale(request):
                 {"error": "No items in cart"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Create a Sales record for this POS transaction
-        # Set salesperson to the staff member processing the sale
-        sale = Sales.objects.create(
-            user=user, 
-            payment_method=payment_method,
-            salesperson=request.user  # Staff member who processed this POS sale
+        mapped_payment_method = _map_payment_method(payment_method)
+        if mapped_payment_method == "cod":
+            mapped_payment_method = "cash"
+
+        sale_notes_parts = [
+            part.strip()
+            for part in [customer_name, customer_contact]
+            if isinstance(part, str) and part.strip()
+        ]
+
+        with transaction.atomic():
+            sale = Sales.objects.create(
+                user=None,
+                total_amount=Decimal("0"),
+                sale_type="pos",
+                payment_status="paid",
+                payment_method=mapped_payment_method,
+                payment_date=timezone.now(),
+                notes=" | ".join(sale_notes_parts),
+                salesperson=request.user,  # Staff member who processed this POS sale
+            )
+
+            total_amount = Decimal("0")
+            for item in cart_items:
+                try:
+                    product = Product.objects.get(id=item["product_id"])
+                    quantity = int(item["quantity"])
+                    item_amount = _decimal_amount(product.price) * quantity
+
+                    supplier_price = (
+                        _decimal_amount(product.supplier_price)
+                        if product.supplier_price is not None
+                        else None
+                    )
+                    SalesItem.objects.create(
+                        sales=sale,
+                        product=product,
+                        quantity_sold=quantity,
+                        amount=item_amount,
+                        supplier_price=supplier_price,
+                    )
+
+                    if hasattr(product, "stock") and product.stock is not None:
+                        product.stock = max(0, product.stock - quantity)
+                        product.save()
+
+                    total_amount += item_amount
+
+                except Product.DoesNotExist:
+                    raise
+
+            sale.total_amount = total_amount
+            sale.save(update_fields=["total_amount"])
+    except Product.DoesNotExist as e:
+        return Response(
+            {"error": f"Product not found: {str(e)}"},
+            status=status.HTTP_400_BAD_REQUEST,
         )
-
-        # Process sale items
-        total_amount = 0
-        for item in cart_items:
-            try:
-                product = Product.objects.get(id=item["product_id"])
-                quantity = int(item["quantity"])
-                item_amount = float(product.price) * quantity
-
-                # Record sale item with amount and supplier price
-                supplier_price = product.supplier_price if product.supplier_price is not None else 0
-                SalesItem.objects.create(
-                    sales=sale,
-                    product=product,
-                    quantity_sold=quantity,
-                    amount=item_amount,
-                    supplier_price=supplier_price,
-                )
-
-                # Update product stock if available
-                if hasattr(product, "stock") and product.stock is not None:
-                    product.stock = max(0, product.stock - quantity)
-                    product.save()
-
-                total_amount += item_amount
-
-            except Product.DoesNotExist:
-                # Delete the sale if a product is not found
-                sale.delete()
-                return Response(
-                    {"error": f'Product with ID {item["product_id"]} not found'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
+    except Exception as e:
+        logger.exception("Failed to process POS sale")
+        return Response(
+            {"error": f"Failed to process sale: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    else:
         # Send notification
         send_notification(
             user.id,
             {
                 "type": "pos_sale_completed",
-                "message": f"POS Sale #{sale.id} completed - ₱{total_amount:.2f}",
+                "message": f"POS Sale #{sale.id} completed - ₱{sale.total_amount:.2f}",
                 "sale_id": sale.id,
-                "total_amount": total_amount,
+                "total_amount": float(sale.total_amount),
             },
         )
 
@@ -1614,7 +1821,7 @@ def pos_sale(request):
             description=f"Processed POS sale #{sale.id} ({payment_method})",
             metadata={
                 "sale_id": sale.id,
-                "total_amount": round(total_amount, 2),
+                "total_amount": float(sale.total_amount),
                 "payment_method": payment_method,
                 "customer_name": customer_name,
                 "customer_contact": customer_contact,
@@ -1634,20 +1841,12 @@ def pos_sale(request):
             {
                 "success": True,
                 "sale_id": sale.id,
-                "total_amount": total_amount,
+                "total_amount": float(sale.total_amount),
                 "message": f"Sale completed successfully! Sale #{sale.id}",
             },
             status=status.HTTP_201_CREATED,
         )
 
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to process sale: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-
-
-# Orders
 @api_view(["GET"])
 def get_order(request, order_id):
     user = request.user
@@ -1705,13 +1904,25 @@ def update_order_status(request, order_id):
     """Update order status - staff only, or order owner for specific fields"""
     # For PayMongo checkout session ID, allow order owner
     checkout_session_id = request.data.get("paymongo_checkout_session_id")
-    if checkout_session_id:
+    payment_id = request.data.get("paymongo_payment_id")
+    if checkout_session_id or payment_id:
         try:
-            order = Order.objects.get(pk=order_id, user=request.user)
-            order.paymongo_checkout_session_id = checkout_session_id
-            order.save()
+            order = (
+                Order.objects.select_related("sale")
+                .get(pk=order_id, user=request.user)
+            )
+            sale = _ensure_sale_for_order(order)
+            fields_to_update = []
+            if checkout_session_id:
+                sale.paymongo_checkout_session_id = checkout_session_id
+                fields_to_update.append("paymongo_checkout_session_id")
+            if payment_id:
+                sale.paymongo_payment_id = payment_id
+                fields_to_update.append("paymongo_payment_id")
+            if fields_to_update:
+                sale.save(update_fields=fields_to_update)
             return Response(
-                {"message": "Checkout session ID stored"}, status=status.HTTP_200_OK
+                {"message": "Payment metadata stored"}, status=status.HTTP_200_OK
             )
         except Order.DoesNotExist:
             return Response(
@@ -1725,10 +1936,12 @@ def update_order_status(request, order_id):
         )
 
     try:
-        order = Order.objects.get(pk=order_id)
+        order = Order.objects.select_related("sale").get(pk=order_id)
+        sale = _ensure_sale_for_order(order)
         new_status = request.data.get("status")
         payment_status = request.data.get("payment_status")
         reason = request.data.get("reason", "")
+        sale_updates: List[str] = []
 
         # Update order status if provided
         if new_status:
@@ -1771,52 +1984,40 @@ def update_order_status(request, order_id):
 
         # Update payment status if provided
         if payment_status:
-            if payment_status not in ["pending", "paid", "failed", "refunded"]:
+            valid_statuses = {choice[0] for choice in Sales.PAYMENT_STATUS_CHOICES}
+            if payment_status not in valid_statuses:
                 return Response(
                     {"error": "Invalid payment status"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            order.payment_status = payment_status
+            sale.payment_status = payment_status
+            sale_updates.append("payment_status")
+            if payment_status == "paid":
+                sale.payment_date = timezone.now()
+                sale_updates.append("payment_date")
 
         order.save()
 
         # If newly completed, record a Sales record and lines
         if new_status == "completed" and not was_completed:
             try:
-                # Map order payment method to sales payment method
-                sale_payment_method = order.payment_method
-                if sale_payment_method == "cash_on_delivery":
-                    sale_payment_method = "cash"
-                elif sale_payment_method not in [
-                    "cash",
-                    "card",
-                    "gcash",
-                    "paymaya",
-                    "bank_transfer",
-                ]:
-                    sale_payment_method = "cash"  # Default to cash for other methods
+                if sale.payment_status != "paid":
+                    sale.payment_status = "paid"
+                    sale.payment_date = timezone.now()
+                    sale_updates.extend(["payment_status", "payment_date"])
 
-                sale = Sales.objects.create(
-                    user=order.user, 
-                    payment_method=sale_payment_method,
-                    order=order  # Link order to sale
-                )
-                for item in order.items.select_related("product").all():
-                    item_amount = float(item.product.price) * item.quantity
-                    supplier_price = item.product.supplier_price if item.product.supplier_price is not None else 0
-                    SalesItem.objects.create(
-                        sales=sale,
-                        product=item.product,
-                        quantity_sold=item.quantity,
-                        amount=item_amount,
-                        supplier_price=supplier_price,
-                    )
-                
                 # Send order completion email
                 from .utils import send_order_completion_email
                 send_order_completion_email(order)
             except Exception as e:
                 logger.error(f"Failed to record sale for order {order.id}: {str(e)}")
+        elif new_status == "cancelled" and sale.payment_status not in ["failed", "refunded"]:
+            sale.payment_status = "failed"
+            sale.payment_date = None
+            sale_updates.extend(["payment_status", "payment_date"])
+
+        if sale_updates:
+            sale.save(update_fields=list(set(sale_updates)))
 
         # Send realtime updates
         order_serializer = OrderSerializer(order)
@@ -2015,9 +2216,10 @@ def create_product_review(request):
             {"error": "Order not found."}, status=status.HTTP_404_NOT_FOUND
         )
 
+    sale_status = order.sale.payment_status if order.sale else None
     if (
         order.status not in ["completed", "returned"]
-        and order.payment_status != "refunded"
+        and sale_status != "refunded"
     ):
         return Response(
             {"error": "Reviews are only allowed for completed or refunded orders."},
@@ -2132,12 +2334,12 @@ def refund_full_sale(request, sale_id):
                     total_refund_amount += item_price * remaining_qty
 
         # Process PayMongo refund if payment is not cash
-        if sale.payment_method != "cash" and sale.order and sale.order.paymongo_payment_id:
+        if sale.payment_method not in ["cash", "cod"] and sale.paymongo_payment_id:
             try:
                 from .paymongo_service import PayMongoService
                 paymongo_service = PayMongoService()
                 refund_result = paymongo_service.create_refund(
-                    payment_id=sale.order.paymongo_payment_id,
+                    payment_id=sale.paymongo_payment_id,
                     amount=total_refund_amount,
                     reason=reason or "requested_by_customer"
                 )
@@ -2255,12 +2457,12 @@ def refund_sale_item(request, sale_id, item_id):
         refund_amount = item_price * refund_quantity
 
         # Process PayMongo refund if payment is not cash
-        if sale.payment_method != "cash" and sale.order and sale.order.paymongo_payment_id:
+        if sale.payment_method not in ["cash", "cod"] and sale.paymongo_payment_id:
             try:
                 from .paymongo_service import PayMongoService
                 paymongo_service = PayMongoService()
                 refund_result = paymongo_service.create_refund(
-                    payment_id=sale.order.paymongo_payment_id,
+                    payment_id=sale.paymongo_payment_id,
                     amount=refund_amount,
                     reason=reason or "requested_by_customer"
                 )
@@ -4173,9 +4375,13 @@ def confirm_payment(request, order_id):
 
         # Get the order - just return current status
         try:
-            order = Order.objects.get(id=order_id, user=request.user)
+            order = (
+                Order.objects.select_related("sale")
+                .get(id=order_id, user=request.user)
+            )
+            payment_status_value = order.sale.payment_status if order.sale else None
             logger.info(
-                f"Order found: ID={order.id}, Status={order.status}, Payment Status={order.payment_status}"
+                f"Order found: ID={order.id}, Status={order.status}, Payment Status={payment_status_value}"
             )
         except Order.DoesNotExist:
             logger.error(f"Order {order_id} not found for user {request.user.username}")
@@ -4189,7 +4395,7 @@ def confirm_payment(request, order_id):
         return Response(
             {
                 "order": order_serializer.data,
-                "payment_status": order.payment_status,
+                "payment_status": payment_status_value,
                 "status": order.status,
             },
             status=status.HTTP_200_OK,
@@ -4530,43 +4736,58 @@ def paymongo_webhook(request):
 
             if order_id and payment_status == "paid":
                 try:
-                    order = Order.objects.get(id=order_id)
-                    print(
-                        f"📦 Order found: {order.id} - Current status: {order.status}, Payment status: {order.payment_status}"
+                    order = (
+                        Order.objects.select_related("sale")
+                        .get(id=order_id)
                     )
-                    print(f"🔑 Checkout Session ID: {order.paymongo_checkout_session_id}")
-                    print(f"💳 Current Payment ID: {order.paymongo_payment_id}")
+                    sale = _ensure_sale_for_order(order)
+                    print(
+                        f"📦 Order found: {order.id} - Current status: {order.status}, Sale payment status: {sale.payment_status}"
+                    )
+                    print(f"🔑 Checkout Session ID: {sale.paymongo_checkout_session_id}")
+                    print(f"💳 Current Payment ID: {sale.paymongo_payment_id}")
 
-                    # Update order payment method based on actual payment source
+                    sale_updates: List[str] = []
                     if payment_source_type:
                         mapped_payment_method = map_paymongo_source_to_payment_method(
                             payment_source_type
                         )
-                        order.payment_method = mapped_payment_method
+                        if sale.payment_method != mapped_payment_method:
+                            sale.payment_method = mapped_payment_method
+                            sale_updates.append("payment_method")
                         print(
-                            f"💳 Payment method updated to: {mapped_payment_method} (from source: {payment_source_type})"
+                            f"💳 Sale payment method updated to: {mapped_payment_method} (from source: {payment_source_type})"
                         )
 
-                    # Update order to paid and to_ship
-                    order.payment_status = "paid"
-                    order.paid_at = timezone.now()
-                    if order.status == "to_pay":
-                        order.status = "to_ship"
-                    
-                    # Set payment ID from webhook data (already extracted above)
+                    sale.payment_status = "paid"
+                    sale.payment_date = timezone.now()
+                    sale_updates.extend(["payment_status", "payment_date"])
+
                     if payment_id:
-                        order.paymongo_payment_id = payment_id
+                        sale.paymongo_payment_id = payment_id
+                        sale_updates.append("paymongo_payment_id")
                         print(f"✅ Payment ID set from webhook data: {payment_id}")
 
+                    checkout_session_identifier = checkout_data.get("id")
+                    if (
+                        checkout_session_identifier
+                        and not sale.paymongo_checkout_session_id
+                    ):
+                        sale.paymongo_checkout_session_id = checkout_session_identifier
+                        sale_updates.append("paymongo_checkout_session_id")
+
+                    if sale_updates:
+                        sale.save(update_fields=list(set(sale_updates)))
+
                     # Also try to fetch full checkout session data as backup
-                    if order.paymongo_checkout_session_id and not payment_id:
+                    if sale.paymongo_checkout_session_id and not payment_id:
                         try:
                             import requests
                             from django.conf import settings
 
                             paymongo_secret = settings.PAYMONGO_SECRET_KEY
                             if paymongo_secret:
-                                checkout_session_url = f"https://api.paymongo.com/v1/checkout_sessions/{order.paymongo_checkout_session_id}"
+                                checkout_session_url = f"https://api.paymongo.com/v1/checkout_sessions/{sale.paymongo_checkout_session_id}"
 
                                 print(
                                     f"🔍 Fetching checkout session from: {checkout_session_url}"
@@ -4604,9 +4825,10 @@ def paymongo_webhook(request):
                                         print(f"🔍 Payment ID from session: {payment_id}")
                                         
                                         if payment_id:
-                                            order.paymongo_payment_id = payment_id
+                                            sale.paymongo_payment_id = payment_id
+                                            sale.save(update_fields=["paymongo_payment_id"])
                                             print(
-                                                f"✅ Payment ID set on order object: {payment_id}"
+                                                f"✅ Payment ID set on sale object: {payment_id}"
                                             )
                                         else:
                                             print(
@@ -4632,20 +4854,29 @@ def paymongo_webhook(request):
                             traceback.print_exc()
                             # Don't fail the webhook if we can't fetch payment ID
 
-                    # Save all changes
-                    order.save()
+                    order_updates: List[str] = []
+                    if order.status == "to_pay":
+                        order.status = "to_ship"
+                        order_updates.append("status")
+                    if order.is_cod:
+                        order.is_cod = False
+                        order_updates.append("is_cod")
+
+                    if order_updates:
+                        order.save(update_fields=list(set(order_updates)))
 
                     # Refresh from database to confirm it was saved
                     order.refresh_from_db()
+                    sale.refresh_from_db()
                     
                     print("\n" + "=" * 80)
                     print("💾 ORDER SAVED - FINAL STATE:")
                     print("=" * 80)
                     print(f"Order ID: {order.id}")
                     print(f"Status: {order.status}")
-                    print(f"Payment Status: {order.payment_status}")
-                    print(f"Checkout Session ID: {order.paymongo_checkout_session_id}")
-                    print(f"⭐ PAYMENT ID: {order.paymongo_payment_id}")
+                    print(f"Sale Payment Status: {sale.payment_status}")
+                    print(f"Checkout Session ID: {sale.paymongo_checkout_session_id}")
+                    print(f"⭐ PAYMENT ID: {sale.paymongo_payment_id}")
                     print("=" * 80 + "\n")
 
                     # Deduct inventory and clear cart
@@ -4694,10 +4925,14 @@ def paymongo_webhook(request):
 
             if order_id:
                 try:
-                    order = Order.objects.get(id=order_id)
-                    order.payment_status = "failed"
-                    # Keep order status as "to_pay" so user can retry
-                    order.save()
+                    order = (
+                        Order.objects.select_related("sale")
+                        .get(id=order_id)
+                    )
+                    sale = _ensure_sale_for_order(order)
+                    sale.payment_status = "failed"
+                    sale.payment_date = None
+                    sale.save(update_fields=["payment_status", "payment_date"])
 
                     print(
                         f"⚠️ Payment failed for order {order.id} - status remains 'to_pay'"
@@ -4733,7 +4968,11 @@ def paymongo_webhook(request):
 
             if order_id:
                 try:
-                    order = Order.objects.get(id=order_id)
+                    order = (
+                        Order.objects.select_related("sale")
+                        .get(id=order_id)
+                    )
+                    sale = _ensure_sale_for_order(order)
 
                     # Extract payment source type from payments array
                     payments = payment_intent_attrs.get("payments", [])
@@ -4746,7 +4985,9 @@ def paymongo_webhook(request):
                                     payment_source_type
                                 )
                             )
-                            order.payment_method = mapped_payment_method
+                            if sale.payment_method != mapped_payment_method:
+                                sale.payment_method = mapped_payment_method
+                                sale.save(update_fields=["payment_method"])
                             print(
                                 f"💳 Payment method updated to: {mapped_payment_method} (from source: {payment_source_type})"
                             )
@@ -4782,9 +5023,14 @@ def paymongo_webhook(request):
 
             if order_id:
                 try:
-                    order = Order.objects.get(id=order_id)
-                    order.payment_status = "failed"
-                    order.save()
+                    order = (
+                        Order.objects.select_related("sale")
+                        .get(id=order_id)
+                    )
+                    sale = _ensure_sale_for_order(order)
+                    sale.payment_status = "failed"
+                    sale.payment_date = None
+                    sale.save(update_fields=["payment_status", "payment_date"])
 
                     # Send realtime updates
                     order_serializer = OrderSerializer(order)

@@ -555,10 +555,64 @@ class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
     user = UsernameSerializer()
     total_amount = serializers.ReadOnlyField()
+    payment_status = serializers.SerializerMethodField()
+    payment_method = serializers.SerializerMethodField()
+    payment_date = serializers.SerializerMethodField()
+    paymongo_checkout_session_id = serializers.SerializerMethodField()
+    paymongo_payment_id = serializers.SerializerMethodField()
+    sale_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
-        fields = "__all__"
+        fields = [
+            "id",
+            "user",
+            "sale_id",
+            "created_at",
+            "status",
+            "shipping_address",
+            "contact_number",
+            "notes",
+            "tracking_code",
+            "is_cod",
+            "cancel_reason",
+            "return_reason",
+            "items",
+            "total_amount",
+            "payment_status",
+            "payment_method",
+            "payment_date",
+            "paymongo_checkout_session_id",
+            "paymongo_payment_id",
+        ]
+
+    def _get_sale(self, obj):
+        sale = getattr(obj, "sale", None)
+        return sale
+
+    def get_sale_id(self, obj):
+        sale = self._get_sale(obj)
+        return sale.id if sale else None
+
+    def get_payment_status(self, obj):
+        sale = self._get_sale(obj)
+        return sale.payment_status if sale else None
+
+    def get_payment_method(self, obj):
+        sale = self._get_sale(obj)
+        return sale.payment_method if sale else None
+
+    def get_payment_date(self, obj):
+        sale = self._get_sale(obj)
+        return sale.payment_date if sale else None
+
+    def get_paymongo_checkout_session_id(self, obj):
+        sale = self._get_sale(obj)
+        return sale.paymongo_checkout_session_id if sale else None
+
+    def get_paymongo_payment_id(self, obj):
+        sale = self._get_sale(obj)
+        return sale.paymongo_payment_id if sale else None
 
 
 class SalesItemSerializer(serializers.ModelSerializer):
@@ -576,20 +630,45 @@ class SalesSerializer(serializers.ModelSerializer):
     total_amount = serializers.SerializerMethodField()
     net_revenue = serializers.SerializerMethodField()
     capital = serializers.SerializerMethodField()
+    order_id = serializers.SerializerMethodField()
     
     class Meta:
         model = Sales
-        fields = ["id", "user", "sale_date", "last_modified", "payment_method", "salesperson", "order", "sales_item", "total_amount", "net_revenue", "capital"]
+        fields = [
+            "id",
+            "user",
+            "sale_date",
+            "last_modified",
+            "sale_type",
+            "payment_status",
+            "payment_method",
+            "payment_date",
+            "notes",
+            "paymongo_checkout_session_id",
+            "paymongo_payment_id",
+            "salesperson",
+            "order_id",
+            "sales_item",
+            "total_amount",
+            "net_revenue",
+            "capital",
+        ]
+
+    def get_order_id(self, obj):
+        order = getattr(obj, "order", None)
+        return order.id if order else None
     
     def get_total_amount(self, obj):
-        # Sum up all item amounts (positive for sales, negative for refunds)
-        # For backward compatibility, calculate from price if amount is None
+        if obj.total_amount is not None:
+            try:
+                return float(obj.total_amount)
+            except (TypeError, ValueError):
+                pass
         total = 0
         for item in obj.sales_item.all():
             if item.amount is not None:
                 total += float(item.amount)
             elif item.product:
-                # Fallback for old records without amount
                 total += float(item.product.price) * item.quantity_sold
         return total
     

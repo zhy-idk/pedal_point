@@ -259,6 +259,8 @@ class ProductListingSerializer(serializers.ModelSerializer):
     # Override name to handle fallback to products (read-only)
     name = serializers.SerializerMethodField()
 
+    hero_image = serializers.SerializerMethodField()
+
     class Meta:
         model = ProductListing
         fields = [
@@ -270,6 +272,7 @@ class ProductListingSerializer(serializers.ModelSerializer):
             "description",
             "images",
             "image",
+            "hero_image",
             "products",
             "compatibility_tags",
             "compatibility_tag_ids",
@@ -306,6 +309,32 @@ class ProductListingSerializer(serializers.ModelSerializer):
             instance.compatibility_tags.set(compatibility_tag_ids)
         
         return instance
+
+    def get_hero_image(self, obj):
+        """
+        Determine the primary image to display for the listing:
+        - Use listing.image if present.
+        - Otherwise fallback to the first variant image.
+        - If none found, return None so frontend can use a placeholder.
+        """
+        if obj.image:
+            try:
+                return obj.image.url
+            except ValueError:
+                # Storage backend might raise if file missing; fall back
+                pass
+
+        variant_image = (
+            obj.variant_images.select_related("product")
+            .order_by("id")
+            .first()
+        )
+        if variant_image and variant_image.image:
+            try:
+                return variant_image.image.url
+            except ValueError:
+                pass
+        return None
 
     def update(self, instance, validated_data):
         category_id = validated_data.pop("category_id", None)

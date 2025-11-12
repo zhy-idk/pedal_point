@@ -1,7 +1,7 @@
 """
 Management command to import inventory rows from Excel into standalone products.
-Creates or updates `Product` entries (no listings/brands) and attaches at most
-one image per product, matching the behavior of the preview command.
+Creates or updates up to 50 `Product` entries (no listings) and attaches one
+image per product in sheet order, using the oldest image for the first row.
 """
 
 import os
@@ -14,7 +14,7 @@ from django.core.files import File
 from django.db import transaction
 from django.utils.text import slugify
 
-from api.models import Product, ProductVariantImage, ProductListing, Brands
+from api.models import Product, ProductVariantImage, Brands
 
 try:
     from PIL import Image, ExifTags
@@ -361,15 +361,14 @@ class Command(BaseCommand):
                 })
 
             total_products = len(products_data)
-            self.stdout.write(f'\nPrepared {total_products} products for import\n')
+            self.stdout.write(f'\nPrepared {total_products} products from Excel\n')
 
-            grouped_products = {}
-            for data in products_data:
-                key = (data.get('brand_key'), data['product_name'])
-                grouped_products.setdefault(key, []).append(data)
-
-            total_listings = len(grouped_products)
-            self.stdout.write(f'Identified {total_listings} unique listing groups\n')
+            preview_limit = 50
+            if preview_limit and total_products > preview_limit:
+                self.stdout.write(
+                    f'Limiting import to first {preview_limit} rows (out of {total_products})'
+                )
+                products_data = products_data[:preview_limit]
 
             image_queue = deque(self.gather_image_paths(images_dir) if images_dir else [])
             image_shortage_warned = False
@@ -381,7 +380,6 @@ class Command(BaseCommand):
 
             if dry_run:
                 self.stdout.write(self.style.WARNING('DRY RUN MODE - No changes will be made\n'))
-                # Show preview
                 for product in products_data[:5]:
                     self.stdout.write(
                         f"Row {product['row_num']}: {product['product_name']} "
@@ -390,150 +388,92 @@ class Command(BaseCommand):
                     )
                 return
 
-            # Process in transaction
             with transaction.atomic():
                 products_created = 0
                 products_updated = 0
-                listings_created = 0
-                listings_existing = 0
 
-                for key, variants in grouped_products.items():
-                    brand_key, product_name = key
+                for product_data in products_data:
                     try:
-                        brand_display = variants[0].get('brand_display') or (
-                            brand_key.title() if isinstance(brand_key, str) else None
-                        )
                         brand_obj = None
+                        brand_display = product_data.get('brand_display')
                         if brand_display:
                             brand_obj, _ = Brands.objects.get_or_create(
                                 name=brand_display,
                                 defaults={'name': brand_display},
                             )
 
-                        listing_qs = ProductListing.objects.filter(name=product_name)
-                        if brand_obj:
-                            listing = (
-                                listing_qs.filter(products__brand=brand_obj)
-                                .distinct()
-                                .first()
+                        defaults = {
+                            'name': product_data['product_name'],
+                            'brand': brand_obj,
+                            'price': product_data['price'],
+                            'supplier_price': product_data.get('supplier_price'),
+                            'stock': product_data['qty'],
+                            'available': product_data['qty'] > 0,
+                            'supply': None,
+                            'product_listing': None,
+                        }
+
+                        product, created = Product.objects.update_or_create(
+                            name=product_data['product_name'],
+                            variant_attribute=product_data['color'],
+                            product_listing=None,
+                            defaults=defaults,
+                        )
+
+                        if created or not product.sku:
+                            new_sku = self.generate_sku(
+                                product_data['product_name'],
+                                brand=brand_display or product_data.get('brand_key'),
+                                variant=product_data.get('color'),
+                                product_id=product.id,
+                            )
+                            if product.sku != new_sku:
+                                product.sku = new_sku
+                                product.save(update_fields=['sku'])
+
+                        if created:
+                            products_created += 1
+                            self.stdout.write(
+                                f"Created product ID {product.id}: {product.name} "
+                                f"(row {product_data['row_num']}, sku={product.sku or 'N/A'})"
                             )
                         else:
-                            listing = listing_qs.first()
-
-                        min_price = min(v['price'] for v in variants)
-
-                        if listing:
-                            listings_existing += 1
-                            if listing.price is None or min_price < listing.price:
-                                listing.price = min_price
-                                listing.save(update_fields=['price'])
-                            listing_thumbnail_set = bool(listing.image)
-                        else:
-                            listing = ProductListing.objects.create(
-                                name=product_name,
-                                price=min_price,
-                                available=True,
-                            )
-                            listings_created += 1
-                            listing_thumbnail_set = False
-
-                        for variant in variants:
-                            defaults = {
-                                'name': product_name,
-                                'brand': brand_obj,
-                                'price': variant['price'],
-                                'supplier_price': variant.get('supplier_price'),
-                                'stock': variant['qty'],
-                                'available': variant['qty'] > 0,
-                                'supply': None,
-                            }
-
-                            product, created = Product.objects.update_or_create(
-                                product_listing=listing,
-                                variant_attribute=variant.get('color'),
-                                defaults=defaults,
+                            products_updated += 1
+                            self.stdout.write(
+                                f"Updated product ID {product.id}: {product.name} "
+                                f"(row {product_data['row_num']}, sku={product.sku or 'N/A'})"
                             )
 
-                            if created or not product.sku:
-                                new_sku = self.generate_sku(
-                                    product_name,
-                                    brand=brand_display or brand_key,
-                                    variant=variant.get('color'),
-                                    product_id=product.id,
-                                )
-                                if product.sku != new_sku:
-                                    product.sku = new_sku
-                                    product.save(update_fields=['sku'])
-
-                            if created:
-                                products_created += 1
-                                self.stdout.write(
-                                    f"Created product ID {product.id}: {product.name} "
-                                    f"(row {variant['row_num']}, sku={product.sku or 'N/A'}, listing={listing.id})"
-                                )
-                            else:
-                                products_updated += 1
-                                self.stdout.write(
-                                    f"Updated product ID {product.id}: {product.name} "
-                                    f"(row {variant['row_num']}, sku={product.sku or 'N/A'}, listing={listing.id})"
-                                )
-
-                            variant_image_obj = None
+                        needs_image = not product.product_images.exists()
+                        if needs_image:
                             image_path = self.next_image(image_queue)
                             if image_path:
                                 try:
-                                    product.product_images.all().delete()
-                                except Exception as delete_err:
-                                    self.stdout.write(
-                                        self.style.WARNING(
-                                            f"Could not clear existing images for '{product.name}': {delete_err}"
-                                        )
-                                    )
-                                try:
-                                    variant_image_obj = self.create_variant_image(
+                                    self.create_variant_image(
                                         product,
                                         image_path,
                                         alt_text=product.variant_attribute or product.name,
-                                        listing=listing,
+                                        listing=None,
                                     )
                                 except Exception as img_err:
                                     self.stdout.write(
                                         self.style.WARNING(
                                             f"Image upload failed for '{product.name}' "
-                                            f"(row {variant['row_num']}): {img_err}"
+                                            f"(row {product_data['row_num']}): {img_err}"
                                         )
                                     )
-                                    variant_image_obj = None
-                            else:
-                                if not image_shortage_warned and not product.product_images.exists():
-                                    self.stdout.write(
-                                        self.style.WARNING(
-                                            f"No image available for product '{product.name}' "
-                                            f"(row {variant['row_num']})"
-                                        )
+                            elif not image_shortage_warned:
+                                self.stdout.write(
+                                    self.style.WARNING(
+                                        f"No image available for product '{product.name}' "
+                                        f"(row {product_data['row_num']})"
                                     )
-                                    image_shortage_warned = True
-                                variant_image_obj = product.product_images.first()
-
-                            if not listing_thumbnail_set and variant_image_obj:
-                                listing.image = variant_image_obj.image
-                                listing.save(update_fields=['image'])
-                                listing_thumbnail_set = True
-
-                        listing_products = listing.products.all()
-                        if listing_products.exists():
-                            new_min_price = min(
-                                p.price for p in listing_products if p.price is not None
-                            )
-                            if listing.price != new_min_price:
-                                listing.price = new_min_price
-                                listing.save(update_fields=['price'])
-                    except Exception as group_err:
-                        row_reference = variants[0]['row_num'] if variants else 'unknown'
+                                )
+                                image_shortage_warned = True
+                    except Exception as row_err:
                         self.stdout.write(
                             self.style.ERROR(
-                                f"Group (brand={brand_key or 'None'}, name={product_name}) "
-                                f"starting at row {row_reference} failed: {group_err}"
+                                f"Row {product_data['row_num']} failed: {row_err}"
                             )
                         )
 
@@ -541,10 +481,6 @@ class Command(BaseCommand):
             self.stdout.write('\n' + '=' * 50)
             self.stdout.write(self.style.SUCCESS('Import completed successfully!'))
             self.stdout.write('=' * 50)
-            self.stdout.write(
-                f'Listings processed: {len(grouped_products)} '
-                f'({listings_created} created, {listings_existing} existing)'
-            )
             self.stdout.write(
                 f'Products: {products_created} created, {products_updated} updated'
             )

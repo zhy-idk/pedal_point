@@ -1,7 +1,7 @@
 """
 Management command to import inventory rows from Excel into standalone products.
-Creates or updates up to 50 `Product` entries (no listings) and attaches one
-image per product in sheet order, using the oldest image for the first row.
+Creates or updates all `Product` entries (no listings) and attaches one image
+per product in sheet order, using filename order (1.jpg, 2.jpg, ...) as priority.
 """
 
 import os
@@ -369,13 +369,6 @@ class Command(BaseCommand):
 
             total_products = len(products_data)
             self.stdout.write(f'\nPrepared {total_products} products from Excel\n')
-
-            preview_limit = 50
-            if preview_limit and total_products > preview_limit:
-                self.stdout.write(
-                    f'Limiting import to first {preview_limit} rows (out of {total_products})'
-                )
-                products_data = products_data[:preview_limit]
 
             image_queue = deque(self.gather_image_paths(images_dir) if images_dir else [])
             image_shortage_warned = False

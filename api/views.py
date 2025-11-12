@@ -1,8 +1,14 @@
-from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.decorators import (
+    api_view,
+    permission_classes,
+    parser_classes,
+    renderer_classes,
+)
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.renderers import BaseRenderer, JSONRenderer, BrowsableAPIRenderer
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -30,6 +36,15 @@ from typing import Any, Dict, List, Tuple
 import requests
 
 logger = logging.getLogger(__name__)
+
+class CSVAttachmentRenderer(BaseRenderer):
+    media_type = "text/csv"
+    format = "csv"
+    charset = "utf-8"
+    render_style = "binary"
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return data
 
 BASIC_FALLBACK_PARTS: Dict[str, List[str]] = {
     "flat": ["tube", "inner tube", "patch kit"],
@@ -1710,6 +1725,7 @@ def get_sales(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
+@renderer_classes([CSVAttachmentRenderer, JSONRenderer, BrowsableAPIRenderer])
 def export_sales(request):
     """Export sales data as a CSV file (staff only)."""
     if not request.user.is_staff:

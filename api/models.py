@@ -822,7 +822,6 @@ class Sales(models.Model):
         ("pos", "POS"),
         ("online", "Online"),
         ("online_cod", "Online COD"),
-        ("preorder", "Pre-order"),
     ]
 
     PAYMENT_STATUS_CHOICES = [

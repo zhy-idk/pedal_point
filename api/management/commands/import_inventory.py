@@ -236,12 +236,7 @@ class Command(BaseCommand):
                 ['supplier', 'vendor', 'supplier name']
             )
 
-            # Validate required columns
-            if brand_idx is None:
-                self.stdout.write(
-                    self.style.ERROR('Could not find brand column. Expected: brand, marca, manufacturer, make')
-                )
-                return
+            # Validate required columns (brand is optional)
             if name_idx is None:
                 self.stdout.write(
                     self.style.ERROR('Could not find product name column. Expected: name, product, product name, item')
@@ -259,7 +254,7 @@ class Command(BaseCommand):
                 return
 
             self.stdout.write('\nColumn mapping:')
-            self.stdout.write(f'  Brand: {df.columns[brand_idx]}')
+            self.stdout.write(f'  Brand: {df.columns[brand_idx] if brand_idx is not None else "Not found (optional)"}')
             self.stdout.write(f'  Product Name: {df.columns[name_idx]}')
             self.stdout.write(f'  Color: {df.columns[color_idx] if color_idx is not None else "Not found"}')
             self.stdout.write(f'  Price: {df.columns[price_idx]}')
@@ -270,7 +265,7 @@ class Command(BaseCommand):
             products_data = []
             
             for idx, row in df.iterrows():
-                brand_name = self.normalize_brand_name(row.iloc[brand_idx])
+                brand_name = self.normalize_brand_name(row.iloc[brand_idx]) if brand_idx is not None else None
                 product_name = self.normalize_product_name(row.iloc[name_idx])
                 color = self.normalize_color(row.iloc[color_idx] if color_idx is not None else None)
                 
@@ -364,12 +359,19 @@ class Command(BaseCommand):
                     if needs_image:
                         image_path = self.next_image(image_queue)
                         if image_path:
-                            self.create_variant_image(
-                                product,
-                                image_path,
-                                alt_text=product.variant_attribute or product.name,
-                                listing=None,
-                            )
+                            try:
+                                self.create_variant_image(
+                                    product,
+                                    image_path,
+                                    alt_text=product.variant_attribute or product.name,
+                                    listing=None,
+                                )
+                            except Exception as img_err:
+                                self.stdout.write(
+                                    self.style.WARNING(
+                                        f"Image upload failed for '{product.name}' (row {product_data['row_num']}): {img_err}"
+                                    )
+                                )
                         elif not image_shortage_warned:
                             self.stdout.write(
                                 self.style.WARNING(

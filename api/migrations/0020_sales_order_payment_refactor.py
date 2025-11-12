@@ -44,7 +44,6 @@ class Migration(migrations.Migration):
                     ("pos", "POS"),
                     ("online", "Online"),
                     ("online_cod", "Online COD"),
-                    ("preorder", "Pre-order"),
                 ],
                 default="online",
                 max_length=20,

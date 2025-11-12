@@ -199,7 +199,7 @@ if (
                     GOOGLE_CREDENTIALS_PATH
                 ),
                 "bucket_name": GS_BUCKET_NAME,
-                "location": "",
+                "location": "media",
                 "file_overwrite": False,
             },
         },

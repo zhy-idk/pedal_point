@@ -15,6 +15,12 @@ from decimal import Decimal
 import os
 from uuid import uuid4
 from collections import deque
+from datetime import datetime
+try:
+    from PIL import Image, ExifTags
+except Exception:
+    Image = None
+    ExifTags = None
 
 
 class Command(BaseCommand):
@@ -64,7 +70,9 @@ class Command(BaseCommand):
         return ' '.join(str(name).strip().split())
 
     def gather_image_paths(self, directory):
-        """Collect image file paths sorted by creation time (oldest first)"""
+        """Collect image file paths sorted by capture/creation time (oldest first).
+        Preference: EXIF DateTimeOriginal > EXIF DateTime > filesystem modified time.
+        """
         if not directory:
             return []
 
@@ -76,22 +84,52 @@ class Command(BaseCommand):
             return []
 
         allowed_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
-        image_paths = []
+        raw_paths = []
 
         for root, _, files in os.walk(resolved_dir):
             for filename in files:
                 ext = os.path.splitext(filename)[1].lower()
                 if ext in allowed_extensions:
-                    image_paths.append(os.path.join(root, filename))
+                    raw_paths.append(os.path.join(root, filename))
 
-        if not image_paths:
+        if not raw_paths:
             self.stdout.write(
                 self.style.WARNING(f'No images found under {resolved_dir}')
             )
             return []
 
-        # Sort by creation time (oldest first)
-        image_paths.sort(key=lambda path: os.path.getctime(path))
+        def parse_exif_datetime(dt_str):
+            # Typical EXIF format: "YYYY:MM:DD HH:MM:SS"
+            try:
+                return datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
+            except Exception:
+                return None
+
+        def get_image_timestamp(path):
+            # Return a datetime representing best guess of when photo was taken/created
+            if Image and ExifTags:
+                try:
+                    with Image.open(path) as img:
+                        exif = img.getexif()
+                        if exif:
+                            tag_map = {ExifTags.TAGS.get(k, k): v for k, v in exif.items()}
+                            for key in ("DateTimeOriginal", "DateTime"):
+                                if key in tag_map:
+                                    dt = parse_exif_datetime(str(tag_map[key]))
+                                    if dt:
+                                        return dt
+                except Exception:
+                    pass
+            # Fallback to filesystem modified time
+            try:
+                return datetime.fromtimestamp(os.path.getmtime(path))
+            except Exception:
+                return datetime.min
+
+        # Build (timestamp, path) and sort oldest first
+        image_with_times = [(get_image_timestamp(p), p) for p in raw_paths]
+        image_with_times.sort(key=lambda x: x[0])
+        image_paths = [p for _, p in image_with_times]
         self.stdout.write(
             f'Found {len(image_paths)} images in {resolved_dir} (sorted oldest first)'
         )

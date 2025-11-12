@@ -293,22 +293,20 @@ class Command(BaseCommand):
             # Collect product data in row order (preserve Excel order)
             products_data = []
             
-        products_data = []
-        
-        for idx, row in df.iterrows():
-            raw_brand = row.iloc[brand_idx] if brand_idx is not None else None
-            brand_key = (
-                self.normalize_brand_name(raw_brand)
-                if raw_brand is not None and str(raw_brand).strip()
-                else None
-            )
-            brand_display = (
-                " ".join(str(raw_brand).strip().split())
-                if raw_brand is not None and str(raw_brand).strip()
-                else None
-            )
-            product_name = self.normalize_product_name(row.iloc[name_idx])
-            color = self.normalize_color(row.iloc[color_idx] if color_idx is not None else None)
+            for idx, row in df.iterrows():
+                raw_brand = row.iloc[brand_idx] if brand_idx is not None else None
+                brand_key = (
+                    self.normalize_brand_name(raw_brand)
+                    if raw_brand is not None and str(raw_brand).strip()
+                    else None
+                )
+                brand_display = (
+                    " ".join(str(raw_brand).strip().split())
+                    if raw_brand is not None and str(raw_brand).strip()
+                    else None
+                )
+                product_name = self.normalize_product_name(row.iloc[name_idx])
+                color = self.normalize_color(row.iloc[color_idx] if color_idx is not None else None)
                 
                 # Get price and quantity
                 try:
@@ -350,36 +348,36 @@ class Command(BaseCommand):
                     )
                     continue
 
-            products_data.append({
-                'row_num': idx + 2,
-                'brand_key': brand_key,
-                'brand_display': brand_display,
-                'color': color,
-                'price': price,
-                'supplier_price': supplier_price_val,
-                'qty': qty,
-                'supplier_name': supplier_name,
-                'product_name': product_name,
-            })
+                products_data.append({
+                    'row_num': idx + 2,
+                    'brand_key': brand_key,
+                    'brand_display': brand_display,
+                    'color': color,
+                    'price': price,
+                    'supplier_price': supplier_price_val,
+                    'qty': qty,
+                    'supplier_name': supplier_name,
+                    'product_name': product_name,
+                })
 
             total_products = len(products_data)
             self.stdout.write(f'\nPrepared {total_products} products for import\n')
 
-        grouped_products = {}
-        for data in products_data:
-            key = (data.get('brand_key'), data['product_name'])
-            grouped_products.setdefault(key, []).append(data)
+            grouped_products = {}
+            for data in products_data:
+                key = (data.get('brand_key'), data['product_name'])
+                grouped_products.setdefault(key, []).append(data)
 
-        total_listings = len(grouped_products)
-        self.stdout.write(f'Identified {total_listings} unique listing groups\n')
+            total_listings = len(grouped_products)
+            self.stdout.write(f'Identified {total_listings} unique listing groups\n')
 
-        image_queue = deque(self.gather_image_paths(images_dir) if images_dir else [])
-        image_shortage_warned = False
-        total_images_available = len(image_queue)
-        if image_queue:
-            self.stdout.write(f'Images available: {total_images_available}')
-        else:
-            self.stdout.write('Images available: 0')
+            image_queue = deque(self.gather_image_paths(images_dir) if images_dir else [])
+            image_shortage_warned = False
+            total_images_available = len(image_queue)
+            if image_queue:
+                self.stdout.write(f'Images available: {total_images_available}')
+            else:
+                self.stdout.write('Images available: 0')
 
             if dry_run:
                 self.stdout.write(self.style.WARNING('DRY RUN MODE - No changes will be made\n'))

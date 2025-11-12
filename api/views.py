@@ -267,9 +267,15 @@ def _format_inventory_for_prompt(
 
 
 def _build_ai_prompt(
-    issue: str, bike_type: str, inventory_context: str, preferred_sizes: List[str]
+    issue: str,
+    bike_type: str,
+    inventory_context: str,
+    preferred_sizes: List[str],
+    initial_diagnosis: str,
+    requested_parts: List[Dict[str, Any]],
 ) -> str:
     size_hint = ", ".join(preferred_sizes) if preferred_sizes else ""
+    requested_json = json.dumps(requested_parts, ensure_ascii=False, indent=2)
     return f"""
 You are a PedalPoint bike shop staff member preparing a repair estimate. Act like a real mechanic: assume the most basic, likely problem unless the customer explicitly states otherwise, and keep the tone professional and friendly.
 
@@ -280,6 +286,10 @@ Customer details:
 
 Available inventory (reference by inventory_id only):
 {inventory_context}
+
+Earlier analysis suggested:
+- Likely diagnosis: {initial_diagnosis or "Not provided"}
+- Requested parts: {requested_json}
 
 Return **valid JSON with no extra text** using exactly this structure:
 {{
@@ -359,13 +369,91 @@ def repair_estimator(request):
         )
 
     try:
-        candidates = _select_candidate_listings(issue, bike_type)
-        inventory_context, inventory_entries = _format_inventory_for_prompt(candidates)
+        # Step 1: get initial AI proposal (parts requested)
+        initial_response = requests.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": settings.FRONTEND_URL,
+                "X-Title": "PedalPoint Repair Estimator",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a professional bike shop assistant for PedalPoint."},
+                    {
+                        "role": "user",
+                        "content": (
+                            "A customer described their bike problem.\n"
+                            f"Bike type: {bike_type}\n"
+                            f"Issue: {issue}\n"
+                            "Identify the most likely specific parts needed (as simple JSON) before doing any pricing.\n"
+                            "Your reply MUST be valid JSON with these keys:\n"
+                            "{\n"
+                            '  "likely_diagnosis": "Short natural language summary",\n'
+                            '  "parts_requested": [\n'
+                            "    {\n"
+                            '      "name": "Desired part name",\n'
+                            '      "attributes": "Relevant sizes or specs (if any)"\n'
+                            "    }\n"
+                            "  ]\n"
+                            "}\n"
+                        ),
+                    },
+                ],
+                "temperature": 0.4,
+            },
+            timeout=20,
+        )
+        initial_response.raise_for_status()
+        initial_data = initial_response.json()
+        initial_text = (
+            initial_data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+
+        try:
+            initial_json = json.loads(initial_text) if initial_text else {}
+        except json.JSONDecodeError:
+            logger.warning("Initial AI JSON parsing failed: %s", initial_text)
+            initial_json = {}
+
+        requested_parts = initial_json.get("parts_requested", [])
+
+        # Step 2: match requested parts via keyword search
+        matched_candidates: List[Tuple[ProductListing, int]] = []
+        if requested_parts:
+            aggregated_keywords: List[str] = []
+            for part in requested_parts:
+                name = part.get("name", "")
+                attrs = part.get("attributes", "")
+                aggregated_keywords.extend(_tokenize(name))
+                aggregated_keywords.extend(_tokenize(attrs))
+
+            aggregated_keywords = list(dict.fromkeys(aggregated_keywords))
+            matched_candidates = _select_candidate_listings(
+                " ".join(aggregated_keywords) or issue, bike_type
+            )
+        else:
+            matched_candidates = _select_candidate_listings(issue, bike_type)
+
+        inventory_context, inventory_entries = _format_inventory_for_prompt(matched_candidates)
         bike_type_lower = (bike_type or "").lower()
         preferred_sizes = BIKE_TYPE_PREFERENCE_MAP.get(bike_type_lower, [])
-        prompt = _build_ai_prompt(issue, bike_type, inventory_context, preferred_sizes)
 
-        response = requests.post(
+        # Step 3: final recommendation prompt
+        prompt = _build_ai_prompt(
+            issue,
+            bike_type,
+            inventory_context,
+            preferred_sizes,
+            initial_json.get("likely_diagnosis", ""),
+            requested_parts,
+        )
+
+        final_response = requests.post(
             f"{base_url}/chat/completions",
             headers={
                 "Content-Type": "application/json",
@@ -379,24 +467,20 @@ def repair_estimator(request):
                     {"role": "system", "content": "You are a professional bike shop assistant for PedalPoint."},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.7,
+                "temperature": 0.5,
             },
             timeout=20,
         )
-        response.raise_for_status()
-        data = response.json()
-
-        choices = data.get("choices", [])
+        final_response.raise_for_status()
+        final_data = final_response.json()
         text = (
-            choices[0]
+            final_data.get("choices", [{}])[0]
             .get("message", {})
             .get("content", "")
-            if choices
-            else ""
         )
 
         if not text:
-            logger.warning("AI response missing text payload: %s", data)
+            logger.warning("AI response missing text payload: %s", final_data)
             return Response(
                 {"error": "AI did not return a response. Please try again."},
                 status=status.HTTP_502_BAD_GATEWAY,
@@ -429,6 +513,10 @@ def repair_estimator(request):
                 "diagnosis": (parsed.get("diagnosis") or "").strip(),
                 "estimated_cost": estimated_cost_section,
                 "next_steps": (parsed.get("next_steps") or "").strip(),
+                "initial_analysis": {
+                    "likely_diagnosis": initial_json.get("likely_diagnosis", ""),
+                    "parts_requested": requested_parts,
+                },
             }
 
             for item in parsed.get("recommended_parts", []):
@@ -444,7 +532,6 @@ def repair_estimator(request):
                             "category_slug": entry["category_slug"],
                             "slug": entry["slug"],
                             "product_url": entry["product_url"],
-                            "notes": item.get("notes", "").strip(),
                             "notes": (item.get("notes") or "").strip(),
                         }
                     )
@@ -453,6 +540,10 @@ def repair_estimator(request):
                 "diagnosis": text.strip() if text else "",
                 "estimated_cost": {},
                 "next_steps": "",
+                "initial_analysis": {
+                    "likely_diagnosis": initial_json.get("likely_diagnosis", ""),
+                    "parts_requested": requested_parts,
+                },
             }
             for entry in inventory_entries[:4]:
                 recommended_payload.append(
@@ -484,6 +575,7 @@ def repair_estimator(request):
                 "bike_type": estimate.bike_type,
                 "ai_sections": ai_sections,
                 "recommended_parts": recommended_payload,
+                "initial_analysis": ai_sections.get("initial_analysis", {}),
                 "updated_at": estimate.updated_at,
             }
         )

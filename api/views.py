@@ -373,6 +373,8 @@ def _build_ai_prompt(
     preferred_sizes: List[str],
     initial_diagnosis: str,
     requested_parts: List[Dict[str, Any]],
+    is_punctured_tire: bool = False,
+    tube_inventory_id: int = None,
 ) -> str:
     size_hint = ", ".join(preferred_sizes) if preferred_sizes else ""
     requested_json = json.dumps(requested_parts, ensure_ascii=False, indent=2)
@@ -387,6 +389,28 @@ Recommended labor fee guide (choose the closest match):
 - Fork Adjustment / Suspension Setup ₱250 - ₱350
 - Full Bike Assembly ₱150 - ₱50
 """.strip()
+    
+    punctured_tire_instruction = ""
+    if is_punctured_tire and tube_inventory_id:
+        punctured_tire_instruction = f"""
+
+CRITICAL INSTRUCTION FOR PUNCTURED TIRE REPAIRS:
+- This is a punctured/flat tire issue. You MUST recommend the tube product with inventory_id {tube_inventory_id}.
+- The labor cost MUST be exactly ₱50 (fifty pesos) for tube replacement.
+- Use this exact format in your response:
+  "recommended_parts": [
+    {{
+      "inventory_id": {tube_inventory_id},
+      "notes": "Tube replacement for punctured tire. Standard installation service."
+    }}
+  ],
+  "estimated_cost": {{
+    "parts_subtotal": "<price of tube product>",
+    "labor": "₱50",
+    "total": "<parts_subtotal + ₱50>"
+  }}
+"""
+    
     return f"""
 You are a PedalPoint bike shop staff member preparing a repair estimate. Act like a real mechanic: assume the most basic, likely problem unless the customer explicitly states otherwise, and keep the tone professional and friendly.
 
@@ -400,7 +424,7 @@ Available inventory (reference by inventory_id only):
 
 Labor fee reference:
 {labor_reference}
-
+{punctured_tire_instruction}
 Earlier analysis suggested:
 - Likely diagnosis: {initial_diagnosis or "Not provided"}
 - Requested parts: {requested_json}
@@ -581,6 +605,44 @@ def repair_estimator(request):
         bike_type_lower = (bike_type or "").lower()
         preferred_sizes = BIKE_TYPE_PREFERENCE_MAP.get(bike_type_lower, [])
 
+        # Check if issue is about punctured tire
+        issue_lower = issue.lower()
+        punctured_tire_keywords = ["punctured", "puncture", "flat tire", "flat", "tire leak", "tire hole", "tire deflated"]
+        is_punctured_tire = any(keyword in issue_lower for keyword in punctured_tire_keywords)
+        
+        # Find product ID 26 (tube) in the matched candidates or search for it
+        tube_inventory_id = None
+        tube_product_id = 26
+        
+        # First, check if product ID 26 is in matched candidates
+        for idx, (listing, _) in enumerate(matched_candidates, start=1):
+            if listing.id == tube_product_id:
+                tube_inventory_id = idx
+                break
+        
+        # If not found, try to find any tube product and use product ID 26 specifically
+        if not tube_inventory_id:
+            try:
+                tube_listing = ProductListing.objects.get(id=tube_product_id, available=True)
+                # Add it to the inventory entries if not already there
+                tube_price = _normalize_listing_price(tube_listing)
+                tube_entry = {
+                    "inventory_id": len(inventory_entries) + 1,
+                    "id": tube_listing.id,
+                    "name": tube_listing.name,
+                    "category": tube_listing.category.name if tube_listing.category else "General",
+                    "category_slug": tube_listing.category.slug if tube_listing.category else "products",
+                    "slug": tube_listing.slug,
+                    "price": tube_price,
+                    "product_url": f"{tube_listing.category.slug if tube_listing.category else 'products'}/{tube_listing.slug}",
+                }
+                inventory_entries.append(tube_entry)
+                tube_inventory_id = tube_entry["inventory_id"]
+                # Update inventory context
+                inventory_context += f"\n{tube_inventory_id}. {tube_listing.name} | Category: {tube_entry['category']} | Price: ₱{tube_price:,.0f} | Product URL: {tube_entry['product_url']}"
+            except ProductListing.DoesNotExist:
+                logger.warning(f"Product ID {tube_product_id} (tube) not found in database")
+        
         # Step 3: final recommendation prompt
         prompt = _build_ai_prompt(
             issue,
@@ -589,6 +651,8 @@ def repair_estimator(request):
             preferred_sizes,
             initial_json.get("likely_diagnosis", ""),
             requested_parts,
+            is_punctured_tire=is_punctured_tire,
+            tube_inventory_id=tube_inventory_id,
         )
 
         final_response = requests.post(
@@ -653,32 +717,108 @@ def repair_estimator(request):
             else:
                 estimated_cost_section = {}
 
-            ai_sections = {
-                "diagnosis": (parsed.get("diagnosis") or "").strip(),
-                "estimated_cost": estimated_cost_section,
-                "next_steps": (parsed.get("next_steps") or "").strip(),
-                "initial_analysis": {
-                    "likely_diagnosis": initial_json.get("likely_diagnosis", ""),
-                    "parts_requested": requested_parts,
-                },
-            }
-
-            for item in parsed.get("recommended_parts", []):
-                inv_id = item.get("inventory_id")
-                entry = inventory_map.get(inv_id)
-                if entry:
+            # Override for punctured tire repairs: force product #26 and ₱50 labor
+            if is_punctured_tire and tube_inventory_id:
+                # Clear existing recommendations and force tube #26
+                recommended_payload = []
+                tube_entry = None
+                for entry in inventory_entries:
+                    if entry.get("id") == tube_product_id or entry.get("inventory_id") == tube_inventory_id:
+                        tube_entry = entry
+                        break
+                
+                if tube_entry:
                     recommended_payload.append(
                         {
-                            "id": entry["id"],
-                            "name": entry["name"],
-                            "price": entry["price"],
-                            "category": entry["category"],
-                            "category_slug": entry["category_slug"],
-                            "slug": entry["slug"],
-                            "product_url": entry["product_url"],
-                            "notes": (item.get("notes") or "").strip(),
+                            "id": tube_entry["id"],
+                            "name": tube_entry["name"],
+                            "price": tube_entry["price"],
+                            "category": tube_entry["category"],
+                            "category_slug": tube_entry["category_slug"],
+                            "slug": tube_entry["slug"],
+                            "product_url": tube_entry["product_url"],
+                            "notes": "Tube replacement for punctured tire. Standard installation service.",
                         }
                     )
+                    
+                    # Override estimated cost with ₱50 labor
+                    tube_price = float(tube_entry["price"])
+                    estimated_cost_section = {
+                        "parts_subtotal": f"₱{tube_price:,.0f}",
+                        "labor": "₱50",
+                        "total": f"₱{tube_price + 50:,.0f}",
+                    }
+                    
+                    # Update diagnosis if needed
+                    diagnosis = parsed.get("diagnosis", "").strip()
+                    if not diagnosis or "punctured" not in diagnosis.lower():
+                        diagnosis = "Your tire has a puncture and needs a new inner tube. This is a common repair that we can complete quickly."
+                    
+                    ai_sections = {
+                        "diagnosis": diagnosis,
+                        "estimated_cost": estimated_cost_section,
+                        "next_steps": (parsed.get("next_steps") or "").strip(),
+                        "initial_analysis": {
+                            "likely_diagnosis": initial_json.get("likely_diagnosis", ""),
+                            "parts_requested": requested_parts,
+                        },
+                    }
+                else:
+                    # Fallback if tube not found
+                    ai_sections = {
+                        "diagnosis": (parsed.get("diagnosis") or "").strip(),
+                        "estimated_cost": estimated_cost_section,
+                        "next_steps": (parsed.get("next_steps") or "").strip(),
+                        "initial_analysis": {
+                            "likely_diagnosis": initial_json.get("likely_diagnosis", ""),
+                            "parts_requested": requested_parts,
+                        },
+                    }
+                    
+                    for item in parsed.get("recommended_parts", []):
+                        inv_id = item.get("inventory_id")
+                        entry = inventory_map.get(inv_id)
+                        if entry:
+                            recommended_payload.append(
+                                {
+                                    "id": entry["id"],
+                                    "name": entry["name"],
+                                    "price": entry["price"],
+                                    "category": entry["category"],
+                                    "category_slug": entry["category_slug"],
+                                    "slug": entry["slug"],
+                                    "product_url": entry["product_url"],
+                                    "notes": (item.get("notes") or "").strip(),
+                                }
+                            )
+            else:
+                # Normal flow for non-punctured tire issues
+                ai_sections = {
+                    "diagnosis": (parsed.get("diagnosis") or "").strip(),
+                    "estimated_cost": estimated_cost_section,
+                    "next_steps": (parsed.get("next_steps") or "").strip(),
+                    "initial_analysis": {
+                        "likely_diagnosis": initial_json.get("likely_diagnosis", ""),
+                        "parts_requested": requested_parts,
+                    },
+                }
+
+                for item in parsed.get("recommended_parts", []):
+                    inv_id = item.get("inventory_id")
+                    entry = inventory_map.get(inv_id)
+                    if entry:
+                        recommended_payload.append(
+                            {
+                                "id": entry["id"],
+                                "name": entry["name"],
+                                "price": entry["price"],
+                                "category": entry["category"],
+                                "category_slug": entry["category_slug"],
+                                "slug": entry["slug"],
+                                "product_url": entry["product_url"],
+                                "notes": (item.get("notes") or "").strip(),
+                            }
+                        )
         else:
             ai_sections = {
                 "diagnosis": text.strip() if text else "",

@@ -156,6 +156,11 @@ urlpatterns = [
         name="check_pending_services",
     ),
     path(
+        "queue/<int:item_id>/cancel/",
+        views.cancel_queue_item,
+        name="cancel_queue_item",
+    ),
+    path(
         "queue/<int:item_id>/update/", views.update_queue_item, name="update_queue_item"
     ),
     # Sales

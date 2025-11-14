@@ -3790,12 +3790,50 @@ def update_queue_item(request, item_id):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def check_pending_services(request):
-    """Check if the authenticated user has any pending services."""
-    pending_services = ServiceQueue.objects.filter(
-        user=request.user, status="pending"
-    ).exists()
+    """Return the customer's service queue along with pending status."""
+    user_queue = (
+        ServiceQueue.objects.filter(user=request.user)
+        .select_related("user")
+        .order_by("queue_date", "id")
+    )
 
-    return Response({"has_pending_services": pending_services})
+    serializer = QueueSerializer(user_queue, many=True)
+    has_pending_services = user_queue.filter(status="pending").exists()
+
+    return Response(
+        {
+            "has_pending_services": has_pending_services,
+            "services": serializer.data,
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def cancel_queue_item(request, item_id):
+    """Allow a customer (or staff) to cancel a pending service queue entry."""
+    try:
+        queue_item = ServiceQueue.objects.get(id=item_id)
+    except ServiceQueue.DoesNotExist:
+        return Response(
+            {"error": "Queue item not found"}, status=status.HTTP_404_NOT_FOUND
+        )
+
+    if queue_item.user != request.user and not request.user.is_staff:
+        return Response(
+            {"error": "You do not have permission to cancel this service."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if queue_item.status == "completed":
+        return Response(
+            {"error": "Completed services can no longer be cancelled."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    queue_item.delete()
+
+    return Response({"message": "Service queue entry cancelled."})
 
 
 @api_view(["GET"])

@@ -36,6 +36,7 @@ import json
 from typing import Any, Dict, List, Tuple
 import requests
 from decimal import Decimal
+from .paymongo_service import PayMongoService
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ SALE_PAYMENT_METHOD_MAP = {
     "grab_pay": "paymongo",
     "shopeepay": "paymongo",
     "qr_ph": "paymongo",
+    "qrph": "paymongo",
     "paymongo": "paymongo",
 }
 
@@ -1743,6 +1745,8 @@ def pos_sale(request):
                 {"error": "No items in cart"}, status=status.HTTP_400_BAD_REQUEST
             )
 
+        normalized_requested_method = (payment_method or "").lower()
+        is_qrph_payment = normalized_requested_method in {"qrph", "qr_ph"}
         mapped_payment_method = _map_payment_method(payment_method)
         if mapped_payment_method == "cod":
             mapped_payment_method = "cash"
@@ -1753,14 +1757,18 @@ def pos_sale(request):
             if isinstance(part, str) and part.strip()
         ]
 
+        payment_status = "pending" if is_qrph_payment else "paid"
+        payment_date = None if is_qrph_payment else timezone.now()
+        qrph_payload = None
+
         with transaction.atomic():
             sale = Sales.objects.create(
                 user=None,
                 total_amount=Decimal("0"),
                 sale_type="pos",
-                payment_status="paid",
+                payment_status=payment_status,
                 payment_method=mapped_payment_method,
-                payment_date=timezone.now(),
+                payment_date=payment_date,
                 notes=" | ".join(sale_notes_parts),
                 salesperson=request.user,  # Staff member who processed this POS sale
             )
@@ -1795,7 +1803,21 @@ def pos_sale(request):
                     raise
 
             sale.total_amount = total_amount
-            sale.save(update_fields=["total_amount"])
+            sale.save(update_fields=["total_amount", "payment_date"])
+
+            if is_qrph_payment:
+                paymongo_service = PayMongoService()
+                qrph_payload = paymongo_service.create_qr_ph(
+                    amount=total_amount,
+                    description=f"POS Sale #{sale.id} - QR Ph Payment",
+                )
+                sale.payment_status = "pending"
+                sale.paymongo_payment_id = (
+                    qrph_payload.get("data", {}).get("id")
+                    if isinstance(qrph_payload, dict)
+                    else None
+                )
+                sale.save(update_fields=["payment_status", "paymongo_payment_id"])
     except Product.DoesNotExist as e:
         return Response(
             {"error": f"Product not found: {str(e)}"},
@@ -1809,11 +1831,17 @@ def pos_sale(request):
         )
     else:
         # Send notification
+        notification_message = (
+            f"POS Sale #{sale.id} pending QR Ph payment - ₱{sale.total_amount:.2f}"
+            if is_qrph_payment
+            else f"POS Sale #{sale.id} completed - ₱{sale.total_amount:.2f}"
+        )
+
         send_notification(
             user.id,
             {
                 "type": "pos_sale_completed",
-                "message": f"POS Sale #{sale.id} completed - ₱{sale.total_amount:.2f}",
+                "message": notification_message,
                 "sale_id": sale.id,
                 "total_amount": float(sale.total_amount),
             },
@@ -1842,15 +1870,21 @@ def pos_sale(request):
             request=request,
         )
 
-        return Response(
-            {
-                "success": True,
-                "sale_id": sale.id,
-                "total_amount": float(sale.total_amount),
-                "message": f"Sale completed successfully! Sale #{sale.id}",
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        response_payload = {
+            "success": True,
+            "sale_id": sale.id,
+            "total_amount": float(sale.total_amount),
+            "message": (
+                "QR Ph payment generated. Ask the customer to scan the code."
+                if is_qrph_payment
+                else f"Sale completed successfully! Sale #{sale.id}"
+            ),
+        }
+
+        if qrph_payload:
+            response_payload["qrph"] = qrph_payload
+
+        return Response(response_payload, status=status.HTTP_201_CREATED)
 
 @api_view(["GET"])
 def get_order(request, order_id):

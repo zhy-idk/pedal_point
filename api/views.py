@@ -1035,6 +1035,8 @@ def get_user(request, user_id):
 @permission_classes([IsAuthenticated])
 def update_user(request, user_id):
     """Update user information. Only accessible by superusers."""
+    # Refresh user from database to ensure we have the latest is_superuser status
+    request.user.refresh_from_db()
     if not request.user.is_superuser:
         return Response(
             {"error": "Superuser access required"}, status=status.HTTP_403_FORBIDDEN
@@ -1057,6 +1059,8 @@ def update_user(request, user_id):
 @permission_classes([IsAuthenticated])
 def delete_user(request, user_id):
     """Delete a user. Only accessible by superusers."""
+    # Refresh user from database to ensure we have the latest is_superuser status
+    request.user.refresh_from_db()
     if not request.user.is_superuser:
         return Response(
             {"error": "Superuser access required"}, status=status.HTTP_403_FORBIDDEN
@@ -1079,6 +1083,8 @@ def delete_user(request, user_id):
 @permission_classes([IsAuthenticated])
 def update_staff_permissions(request, user_id):
     """Update staff permissions. Only accessible by superusers."""
+    # Refresh user from database to ensure we have the latest is_superuser status
+    request.user.refresh_from_db()
     if not request.user.is_superuser:
         return Response(
             {"error": "Superuser access required"}, status=status.HTTP_403_FORBIDDEN
@@ -1131,6 +1137,8 @@ def update_staff_permissions(request, user_id):
 @permission_classes([IsAuthenticated])
 def get_audit_logs(request):
     """Retrieve audit log entries for administrative review."""
+    # Refresh user from database to ensure we have the latest is_superuser status
+    request.user.refresh_from_db()
     if not request.user.is_superuser:
         return Response(
             {"error": "Superuser access required"}, status=status.HTTP_403_FORBIDDEN

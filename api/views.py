@@ -1543,6 +1543,8 @@ def buy_now_checkout(request):
         payment_status = _initial_payment_status(mapped_payment_method)
         normalized_notes = (notes or "").strip()
 
+        line_items_payload: List[Dict[str, Any]] = []
+
         with transaction.atomic():
             sale = Sales.objects.create(
                 user=user if user.is_authenticated else None,
@@ -1739,6 +1741,10 @@ def pos_sale(request):
         payment_method = request.data.get("payment_method", "cash")
         customer_name = request.data.get("customer_name", "Walk-in Customer")
         customer_contact = request.data.get("customer_contact", "")
+        success_url = request.data.get("success_url") or getattr(
+            settings, "FRONTEND_URL", ""
+        )
+        cancel_url = request.data.get("cancel_url") or success_url
 
         if not cart_items:
             return Response(
@@ -1760,6 +1766,7 @@ def pos_sale(request):
         payment_status = "pending" if is_qrph_payment else "paid"
         payment_date = None if is_qrph_payment else timezone.now()
         qrph_payload = None
+        checkout_session = None
 
         with transaction.atomic():
             sale = Sales.objects.create(
@@ -1798,6 +1805,15 @@ def pos_sale(request):
                         product.save()
 
                     total_amount += item_amount
+                    line_items_payload.append(
+                        {
+                            "currency": "PHP",
+                            "amount": int(item_amount * 100),
+                            "name": f"{product.name} {product.variant_attribute or ''}".strip()
+                            or product.name,
+                            "quantity": quantity,
+                        }
+                    )
 
                 except Product.DoesNotExist:
                     raise
@@ -1807,17 +1823,45 @@ def pos_sale(request):
 
             if is_qrph_payment:
                 paymongo_service = PayMongoService()
-                qrph_payload = paymongo_service.create_qr_ph(
-                    amount=total_amount,
-                    description=f"POS Sale #{sale.id} - QR Ph Payment",
-                )
+                try:
+                    checkout_session = paymongo_service._make_request(
+                        "POST",
+                        "/checkout_sessions",
+                        {
+                            "data": {
+                                "attributes": {
+                                    "billing": {
+                                        "name": customer_name,
+                                        "phone": customer_contact or None,
+                                    },
+                                    "send_email_receipt": False,
+                                    "show_description": True,
+                                    "show_line_items": True,
+                                    "payment_method_types": ["qrph"],
+                                    "description": f"POS Sale #{sale.id}",
+                                    "line_items": line_items_payload,
+                                    "success_url": success_url,
+                                    "cancel_url": cancel_url,
+                                    "metadata": {
+                                        "sale_id": sale.id,
+                                        "type": "pos_qrph",
+                                        "staff_id": request.user.id,
+                                    },
+                                }
+                            }
+                        },
+                    )
+                except Exception as e:
+                    logger.exception("Failed to create PayMongo checkout session")
+                    raise e
+
                 sale.payment_status = "pending"
-                sale.paymongo_payment_id = (
-                    qrph_payload.get("data", {}).get("id")
-                    if isinstance(qrph_payload, dict)
+                sale.paymongo_checkout_session_id = (
+                    checkout_session.get("data", {}).get("id")
+                    if isinstance(checkout_session, dict)
                     else None
                 )
-                sale.save(update_fields=["payment_status", "paymongo_payment_id"])
+                sale.save(update_fields=["payment_status", "paymongo_checkout_session_id"])
     except Product.DoesNotExist as e:
         return Response(
             {"error": f"Product not found: {str(e)}"},
@@ -1833,6 +1877,12 @@ def pos_sale(request):
         # Send notification
         notification_message = (
             f"POS Sale #{sale.id} pending QR Ph payment - ₱{sale.total_amount:.2f}"
+            if is_qrph_payment
+            else f"POS Sale #{sale.id} completed - ₱{sale.total_amount:.2f}"
+        )
+
+        notification_message = (
+            f"POS Sale #{sale.id} awaiting QR Ph payment - ₱{sale.total_amount:.2f}"
             if is_qrph_payment
             else f"POS Sale #{sale.id} completed - ₱{sale.total_amount:.2f}"
         )
@@ -1875,14 +1925,19 @@ def pos_sale(request):
             "sale_id": sale.id,
             "total_amount": float(sale.total_amount),
             "message": (
-                "QR Ph payment generated. Ask the customer to scan the code."
+                "QR Ph checkout session generated. Complete payment in the new window."
                 if is_qrph_payment
                 else f"Sale completed successfully! Sale #{sale.id}"
             ),
         }
 
-        if qrph_payload:
-            response_payload["qrph"] = qrph_payload
+        if checkout_session:
+            response_payload["checkout_session"] = checkout_session
+            response_payload["checkout_url"] = (
+                checkout_session.get("data", {})
+                .get("attributes", {})
+                .get("checkout_url")
+            )
 
         return Response(response_payload, status=status.HTTP_201_CREATED)
 

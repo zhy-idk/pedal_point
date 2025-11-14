@@ -91,6 +91,8 @@ class StaffUserSerializer(serializers.ModelSerializer):
 
     full_name = serializers.SerializerMethodField()
     staff_permissions = StaffPermissionsSerializer(read_only=True)
+    first_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    last_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = User

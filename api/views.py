@@ -1034,10 +1034,10 @@ def get_user(request, user_id):
 @api_view(["PUT"])
 @permission_classes([IsAuthenticated])
 def update_user(request, user_id):
-    """Update user information. Only accessible by staff."""
-    if not request.user.is_staff:
+    """Update user information. Only accessible by superusers."""
+    if not request.user.is_superuser:
         return Response(
-            {"error": "Staff access required"}, status=status.HTTP_403_FORBIDDEN
+            {"error": "Superuser access required"}, status=status.HTTP_403_FORBIDDEN
         )
 
     try:

@@ -320,6 +320,11 @@ urlpatterns = [
     path("user/profile/update/", views.update_user_profile, name="update_user_profile"),
     # Order Cancellation
     path("orders/<int:order_id>/cancel/", views.cancel_order, name="cancel_order"),
+    path(
+        "orders/<int:order_id>/received/",
+        views.mark_order_received,
+        name="mark_order_received",
+    ),
     # Chat System
     path("chat/rooms/", views.get_chat_rooms, name="get_chat_rooms"),
     # Dashboard

@@ -463,6 +463,11 @@ def repair_estimator(request):
     payload = request.data or {}
     issue = (payload.get("issue") or "").strip()
     bike_type = (payload.get("bike_type") or "").strip() or "Unknown"
+    try:
+        limit = int(payload.get("limit", 12))
+    except (TypeError, ValueError):
+        limit = 12
+    limit = max(1, min(limit, 25))
 
     if len(issue) < 20:
         return Response(
@@ -551,10 +556,10 @@ def repair_estimator(request):
 
             aggregated_keywords = list(dict.fromkeys(aggregated_keywords))
             matched_candidates = _select_candidate_listings(
-                " ".join(aggregated_keywords) or issue, bike_type
+                " ".join(aggregated_keywords) or issue, bike_type, limit=limit
             )
         else:
-            matched_candidates = _select_candidate_listings(issue, bike_type)
+            matched_candidates = _select_candidate_listings(issue, bike_type, limit=limit)
 
         logger.info(
             "RepairEstimator matched catalog items (limit %s) for user %s: %s",
@@ -2029,6 +2034,44 @@ def update_order_status(request, order_id):
         return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def mark_order_received(request, order_id):
+    """Allow customers to mark their order as received/completed."""
+    try:
+        order = (
+            Order.objects.select_related("sale")
+            .get(pk=order_id, user=request.user)
+        )
+    except Order.DoesNotExist:
+        return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    if order.status != "to_deliver":
+        return Response(
+            {"error": "Only orders marked 'To Deliver' can be completed."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    sale = _ensure_sale_for_order(order)
+
+    order.status = "completed"
+    order.save(update_fields=["status"])
+
+    sale_updates: List[str] = []
+    if sale.payment_status != "paid":
+        sale.payment_status = "paid"
+        sale.payment_date = timezone.now()
+        sale_updates.extend(["payment_status", "payment_date"])
+
+    if sale_updates:
+        sale.save(update_fields=list(set(sale_updates)))
+
+    order_serializer = OrderSerializer(order)
+    send_order_update(order.user.id, order_serializer.data)
+
+    return Response(order_serializer.data, status=status.HTTP_200_OK)
 
 
 # Sales

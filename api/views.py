@@ -1915,6 +1915,7 @@ def pos_sale(request):
         payment_date = None if is_qrph_payment else timezone.now()
         qrph_payload = None
         checkout_session = None
+        line_items_payload: List[Dict[str, Any]] = []
 
         with transaction.atomic():
             sale = Sales.objects.create(

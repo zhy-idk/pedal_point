@@ -45,8 +45,7 @@ ALLOWED_HOSTS = [
     "192.168.1.123",
     "192.168.56.1",
     "0.0.0.0",
-    # Allow all local network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
-    "*",  # Allow all hosts for development - remove in production
+    # Allow all local network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x)  # Allow all hosts for development - remove in production
 ]
 
 
@@ -459,6 +458,8 @@ CSRF_TRUSTED_ORIGINS = [
     "https://pedalpoint-frontend.onrender.com",
     "https://pedal-point.onrender.com",
     "https://pedalpoint.share.zrok.io",
+    FRONTEND_URL,
+    LOCAL_URL,
 ]
 
 # Add environment-based URLs if they're not already in the list

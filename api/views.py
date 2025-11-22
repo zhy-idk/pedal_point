@@ -1032,20 +1032,16 @@ def get_user(request, user_id):
 
 
 @api_view(["PUT"])
-#@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated])
 def update_user(request, user_id):
-    """Update user information. Only accessible by superusers."""
-    # Refresh user from database to ensure we have the latest is_superuser status
     request.user.refresh_from_db()
-    print("Test access", flush=True)
-    logger.info(f"User {request.user.email} attempting to update user {user_id}")
+    logger.info(f"UPDATE USER CALLED - User: {request.user.email}, is_superuser: {request.user.is_superuser}")
+    
     if not request.user.is_superuser:
-        print(f"{request.user.is_superuser} {request.user.email}")
+        logger.warning(f"Superuser access denied for {request.user.email}")
         return Response(
             {"error": "Superuser access required"}, status=status.HTTP_403_FORBIDDEN
         )
-
-    print(f"{request.user.is_superuser} {request.user.email}")
 
     try:
         user = User.objects.get(id=user_id)

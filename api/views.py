@@ -1038,6 +1038,7 @@ def update_user(request, user_id):
     # Refresh user from database to ensure we have the latest is_superuser status
     request.user.refresh_from_db()
     print("Test access", flush=True)
+    logger.info(f"User {request.user.email} attempting to update user {user_id}")
     if not request.user.is_superuser:
         print(f"{request.user.is_superuser} {request.user.email}")
         return Response(

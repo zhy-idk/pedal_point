@@ -1037,6 +1037,7 @@ def update_user(request, user_id):
     """Update user information. Only accessible by superusers."""
     # Refresh user from database to ensure we have the latest is_superuser status
     request.user.refresh_from_db()
+    print("Test access", flush=True)
     if not request.user.is_superuser:
         print(f"{request.user.is_superuser} {request.user.email}")
         return Response(

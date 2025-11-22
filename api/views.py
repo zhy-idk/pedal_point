@@ -1038,10 +1038,12 @@ def update_user(request, user_id):
     # Refresh user from database to ensure we have the latest is_superuser status
     request.user.refresh_from_db()
     if not request.user.is_superuser:
+        print(f"{request.user.is_superuser} {request.user.email}")
         return Response(
             {"error": "Superuser access required"}, status=status.HTTP_403_FORBIDDEN
         )
-        print(f"Superuser access required {request.user.is_superuser} {request.user.email}")
+
+    print(f"{request.user.is_superuser} {request.user.email}")
 
     try:
         user = User.objects.get(id=user_id)

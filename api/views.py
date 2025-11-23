@@ -1040,7 +1040,7 @@ def update_user(request, user_id):
     if not request.user.is_superuser:
         logger.warning(f"Superuser access denied for {request.user.email}")
         return Response(
-            {"error": "Superuser access required"}, status=status.HTTP_403_FORBIDDEN
+            {"error": f"{request.user.email} is not a superuser"}, status=status.HTTP_403_FORBIDDEN
         )
 
     try:

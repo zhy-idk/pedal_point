@@ -398,8 +398,6 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "https://pedalpoint.share.zrok.io",
     "https://pedalpoint-frontend.onrender.com",
-    FRONTEND_URL,
-    LOCAL_URL,
 ]
 
 CSRF_COOKIE_HTTPONLY = False  # Must be False for JavaScript access
@@ -458,6 +456,8 @@ CSRF_TRUSTED_ORIGINS = [
     "https://pedalpoint-frontend.onrender.com",
     "https://pedal-point.onrender.com",
     "https://pedalpoint.share.zrok.io",
+    FRONTEND_URL,
+    LOCAL_URL,
 ]
 
 # Add environment-based URLs if they're not already in the list

@@ -458,8 +458,6 @@ CSRF_TRUSTED_ORIGINS = [
     "https://pedalpoint-frontend.onrender.com",
     "https://pedal-point.onrender.com",
     "https://pedalpoint.share.zrok.io",
-    FRONTEND_URL,
-    LOCAL_URL,
 ]
 
 # Add environment-based URLs if they're not already in the list
